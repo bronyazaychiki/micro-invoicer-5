@@ -1,10 +1,13 @@
 """How about now."""
 from datetime import date, timedelta, datetime
 from django.http import FileResponse
+from django.shortcuts import get_object_or_404, render, redirect
 from django.urls import reverse_lazy
+from django.views import View
 from django.views.generic import TemplateView
 from django.views.generic.detail import DetailView
 from django.views.generic.edit import CreateView, DeleteView, UpdateView
+from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
 from django.forms.models import model_to_dict
@@ -14,7 +17,7 @@ from dateutil.rrule import rrule, MONTHLY
 from django.apps import apps
 from decimal import Decimal
 
-from . import forms, models, pdf_rendering, micro_timesheet
+from . import forms, models, pdf_rendering
 from .temporary_locale import TemporaryLocale
 
 
@@ -324,7 +327,9 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         form.instance.buyer = contract.buyer
         form.instance.series = registry.invoice_series
         form.instance.number = registry.next_invoice_no
-        form.instance.status = models.InvoiceStatus.PUBLISHED
+        # New invoices start as drafts; the timesheet is filled in and the
+        # invoice is published afterwards (see TimeInvoicePublishView).
+        form.instance.status = models.InvoiceStatus.DRAFT
         form.instance.currency = contract.invoicing_currency
         form.instance.unit = contract.unit
         form.instance.unit_rate = contract.unit_rate
@@ -381,28 +386,112 @@ class TimeInvoicePrintView(LoginRequiredMixin, DetailView):
         return response
 
 
-class TimeInvoiceFakeTimesheetView(LoginRequiredMixin, DetailView):
-    """Generate fake timesheet as PDF file"""
+class TimeInvoicePublishView(LoginRequiredMixin, View):
+    """Publish a draft invoice once its timesheet reconciles (then it is read-only)."""
+
+    def post(self, request, *args, **kwargs):
+        invoice = get_object_or_404(models.TimeInvoice, pk=kwargs["pk"])
+
+        if not invoice.is_draft:
+            messages.error(request, "Only draft invoices can be published.")
+        elif not invoice.timesheet_reconciled:
+            messages.error(
+                request,
+                f"Cannot publish: timesheet totals {invoice.timesheet_total_hours:g}h "
+                f"but invoice {invoice.series_number} is for {invoice.quantity}h. "
+                f"Balance the timesheet first.",
+            )
+        else:
+            invoice.status = models.InvoiceStatus.PUBLISHED
+            invoice.save(update_fields=["status"])
+            messages.success(request, f"Invoice {invoice.series_number} published.")
+
+        return redirect(
+            "registry-invoice-detail", registry_id=invoice.registry_id, pk=invoice.pk
+        )
+
+
+class TimesheetEditView(LoginRequiredMixin, View):
+    """Maintain the persisted timesheet entries for a draft invoice."""
+
+    template_name = "timesheet_form.html"
+
+    def get(self, request, *args, **kwargs):
+        invoice = get_object_or_404(models.TimeInvoice, pk=kwargs["pk"])
+        if not invoice.is_draft:
+            return self._locked_redirect(request, invoice)
+        formset = forms.TimesheetEntryFormSet(instance=invoice)
+        self._seed_defaults(invoice, formset)
+        return render(request, self.template_name, self._context(invoice, formset))
+
+    def post(self, request, *args, **kwargs):
+        invoice = get_object_or_404(models.TimeInvoice, pk=kwargs["pk"])
+        if not invoice.is_draft:
+            return self._locked_redirect(request, invoice)
+        formset = forms.TimesheetEntryFormSet(request.POST, instance=invoice)
+        if formset.is_valid():
+            formset.save()
+            messages.success(request, "Timesheet saved.")
+            return redirect(
+                "registry-invoice-detail", registry_id=invoice.registry_id, pk=invoice.pk
+            )
+        return render(request, self.template_name, self._context(invoice, formset))
+
+    def _locked_redirect(self, request, invoice):
+        messages.error(
+            request, "This invoice is published; its timesheet is read-only."
+        )
+        return redirect(
+            "registry-invoice-detail", registry_id=invoice.registry_id, pk=invoice.pk
+        )
+
+    @staticmethod
+    def _seed_defaults(invoice, formset):
+        """Prefill empty rows with the contract's default project (reuse helper)."""
+        if invoice.timesheet_entries.exists():
+            return
+        default_project = invoice.contract.default_project
+        if default_project:
+            for form in formset.forms:
+                form.initial.setdefault("project", default_project)
+
+    def _context(self, invoice, formset):
+        return {
+            "invoice": invoice,
+            "formset": formset,
+            "presets": invoice.contract.preset_lines(),
+            "form_title": f"Timesheet for invoice {invoice.series_number}",
+        }
+
+
+class TimeInvoiceTimesheetView(LoginRequiredMixin, DetailView):
+    """Download the invoice's timesheet annex as a PDF, built from saved entries."""
 
     model = models.TimeInvoice
     response_class = FileResponse
 
     def render_to_response(self, context, **response_kwargs):
-        """Returns content of generated pdf"""
         invoice = context["object"]
-        if "last_month" in invoice.contract.invoicing_description:
-            start_date = invoice.issue_date.replace(day=1) - timedelta(days=1)
-            start_date = start_date.replace(day=1)
-        else:
-            start_date = invoice.issue_date.replace(day=1)
-        timesheet = micro_timesheet.fake_timesheet(
-            invoice.quantity, "Dashboard", "Web Application", start_date
-        )
-        content = pdf_rendering.render_timesheet(invoice, timesheet)
-        response = FileResponse(
+        if not invoice.timesheet_reconciled:
+            messages.error(
+                self.request,
+                "The timesheet doesn't reconcile with the invoice yet — "
+                "fix it before downloading the annex.",
+            )
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry_id,
+                pk=invoice.pk,
+            )
+
+        tasks = [
+            dict(date=entry.work_date, project=entry.project, name=entry.activity, duration=entry.hours)
+            for entry in invoice.timesheet_entries.all()
+        ]
+        content = pdf_rendering.render_timesheet(invoice, {"tasks": tasks})
+        return FileResponse(
             content,
             filename=f"{invoice.series_number}-timesheet.pdf",
             as_attachment=True,
             content_type="application/pdf",
         )
-        return response

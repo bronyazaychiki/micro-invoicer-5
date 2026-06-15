@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col s12">
+        <div class="card">
+            <div class="card-content">
+                <span class="card-title grey-text text-darken-2">{{ form_title }}</span>
+                <p>
+                    Target: <strong>{{ invoice.quantity }} h</strong> &middot;
+                    Current: <strong><span id="running-total">0</span> h</strong>
+                    <span id="balance-hint"></span>
+                </p>
+
+                {% if formset.non_form_errors %}
+                <div class="card-panel red lighten-4 red-text text-darken-4" style="padding: 10px 16px;">
+                    {% for error in formset.non_form_errors %}{{ error }}<br>{% endfor %}
+                </div>
+                {% endif %}
+
+                <form method="post">
+                    {% csrf_token %}
+                    {{ formset.management_form }}
+
+                    <table class="striped" style="table-layout: fixed;">
+                        <thead>
+                            <tr>
+                                <th style="width: 18%;">Date</th>
+                                <th style="width: 22%;">Project</th>
+                                <th>Activity</th>
+                                <th style="width: 10%;">Hours</th>
+                                <th style="width: 8%;">Remove</th>
+                            </tr>
+                        </thead>
+                        <tbody id="entries-body">
+                            {% for form in formset %}
+                            <tr>
+                                {{ form.id }}
+                                <td>
+                                    {{ form.work_date }}
+                                    {% if form.work_date.errors %}<span class="red-text">{{ form.work_date.errors|striptags }}</span>{% endif %}
+                                </td>
+                                <td>
+                                    {{ form.project }}
+                                    {% if form.project.errors %}<span class="red-text">{{ form.project.errors|striptags }}</span>{% endif %}
+                                </td>
+                                <td>
+                                    {{ form.activity }}
+                                    {% if form.activity.errors %}<span class="red-text">{{ form.activity.errors|striptags }}</span>{% endif %}
+                                </td>
+                                <td>
+                                    {{ form.hours }}
+                                    {% if form.hours.errors %}<span class="red-text">{{ form.hours.errors|striptags }}</span>{% endif %}
+                                </td>
+                                <td class="center-align">{{ form.DELETE }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+
+                    <div style="margin: 12px 0;">
+                        <button type="button" id="add-row" class="btn-small grey darken-1">+ Add row</button>
+                    </div>
+
+                    <div class="card-action right-align">
+                        <a class="btn-flat" href="{% url 'registry-invoice-detail' registry_id=invoice.registry_id pk=invoice.pk %}">Cancel</a>
+                        <button class="btn btn-large" type="submit" style="background-color: rgba(0, 0, 0, 0.87)">Save timesheet</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<datalist id="task-presets">
+    {% for preset in presets %}<option value="{{ preset }}">{% endfor %}
+</datalist>
+
+<script type="text/html" id="empty-row">
+    {{ formset.empty_form.id }}
+    <td>{{ formset.empty_form.work_date }}</td>
+    <td>{{ formset.empty_form.project }}</td>
+    <td>{{ formset.empty_form.activity }}</td>
+    <td>{{ formset.empty_form.hours }}</td>
+    <td class="center-align">{{ formset.empty_form.DELETE }}</td>
+</script>
+
+<script>
+(function () {
+    var tbody = document.getElementById("entries-body");
+    var totalForms = document.getElementById("id_{{ formset.prefix }}-TOTAL_FORMS");
+    var emptyMarkup = document.getElementById("empty-row").innerHTML;
+    var target = parseFloat("{{ invoice.quantity }}");
+
+    function recalc() {
+        var sum = 0;
+        tbody.querySelectorAll('input[name$="-hours"]').forEach(function (inp) {
+            var del = inp.closest("tr").querySelector('input[name$="-DELETE"]');
+            if (del && del.checked) return;
+            var v = parseFloat(inp.value);
+            if (!isNaN(v)) sum += v;
+        });
+        var rounded = Math.round(sum * 100) / 100;
+        document.getElementById("running-total").textContent = rounded;
+        var hint = document.getElementById("balance-hint");
+        if (rounded === target) {
+            hint.textContent = " ✔ balanced";
+            hint.className = "green-text text-darken-2";
+        } else {
+            hint.textContent = " (needs " + target + ")";
+            hint.className = "red-text text-darken-2";
+        }
+    }
+
+    document.getElementById("add-row").addEventListener("click", function () {
+        var idx = parseInt(totalForms.value, 10);
+        var tr = document.createElement("tr");
+        tr.innerHTML = emptyMarkup.replace(/__prefix__/g, idx);
+        tbody.appendChild(tr);
+        totalForms.value = idx + 1;
+        recalc();
+    });
+
+    tbody.addEventListener("input", recalc);
+    tbody.addEventListener("change", recalc);
+    recalc();
+})();
+</script>
+{% endblock %}

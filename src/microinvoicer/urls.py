@@ -49,8 +49,18 @@ urlpatterns = [
     ),
     path(
         "registry/<registry_id>/invoice/<pk>/timesheet",
-        views.TimeInvoiceFakeTimesheetView.as_view(),
+        views.TimeInvoiceTimesheetView.as_view(),
         name="registry-invoice-timesheet",
+    ),
+    path(
+        "registry/<registry_id>/invoice/<pk>/timesheet/edit",
+        views.TimesheetEditView.as_view(),
+        name="registry-invoice-timesheet-edit",
+    ),
+    path(
+        "registry/<registry_id>/invoice/<pk>/publish",
+        views.TimeInvoicePublishView.as_view(),
+        name="registry-invoice-publish",
     ),
     path("home/", views.MicroHomeView.as_view(), name="home"),
     path("report/", views.ReportView.as_view(), name="report"),

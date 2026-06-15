@@ -6,6 +6,7 @@ from django.contrib.auth.models import PermissionsMixin
 from django.utils import timezone
 from django_countries.fields import CountryField
 from datetime import date
+from decimal import Decimal
 
 from .managers import MicroUserManager
 
@@ -116,6 +117,12 @@ class ServiceContract(models.Model):
     invoicing_description = models.CharField(
         "Service description template", max_length=LONG_TEXT, blank=True
     )
+    default_project = models.CharField("Default project name", max_length=LONG_TEXT, blank=True)
+    task_presets = models.TextField("Common task descriptions (one per line)", blank=True)
+
+    def preset_lines(self):
+        """Reusable task descriptions, one per non-empty line."""
+        return [line.strip() for line in self.task_presets.splitlines() if line.strip()]
 
     def __repr__(self) -> str:
         return f"{self.buyer!r}, {self.unit_rate} {self.currency}/{self.unit}"
@@ -167,8 +174,45 @@ class TimeInvoice(models.Model):
     def contract_currency(self):
         return self.contract.currency
 
+    @property
+    def is_draft(self):
+        return self.status == InvoiceStatus.DRAFT
+
+    @property
+    def timesheet_total_hours(self):
+        """Sum of all timesheet entry durations."""
+        return sum((entry.hours for entry in self.timesheet_entries.all()), Decimal("0"))
+
+    @property
+    def timesheet_reconciled(self):
+        """True when the timesheet has entries and their hours match the invoiced quantity."""
+        return self.timesheet_entries.exists() and self.timesheet_total_hours == Decimal(self.quantity)
+
     def __repr__(self) -> str:
         return f"{self.series_number} for {self.buyer}"
+
+    def __str__(self):
+        return repr(self)
+
+
+class TimesheetEntry(models.Model):
+    """A single dated activity backing an invoice's timesheet annex."""
+
+    invoice = models.ForeignKey(
+        TimeInvoice, related_name="timesheet_entries", on_delete=models.CASCADE
+    )
+    work_date = models.DateField("Date")
+    project = models.CharField(max_length=LONG_TEXT, blank=True)
+    activity = models.CharField("Task", max_length=LONG_TEXT)
+    hours = models.DecimalField(
+        max_digits=6, decimal_places=2, validators=(MinValueValidator(Decimal("0.01")),)
+    )
+
+    class Meta:
+        ordering = ["work_date", "id"]
+
+    def __repr__(self) -> str:
+        return f"{self.work_date} {self.activity} ({self.hours}h)"
 
     def __str__(self):
         return repr(self)

@@ -2,6 +2,18 @@
 {% load humanize %}
 
 {% block content %}
+{% if messages %}
+<div class="row">
+    <div class="col s12">
+        {% for message in messages %}
+        <div class="card-panel {% if message.tags == 'error' %}red lighten-4 red-text text-darken-4{% else %}green lighten-4 green-text text-darken-4{% endif %}" style="padding: 10px 16px; margin: 6px 0;">
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
 <div class="row">
     <div class="row">
         <div class="col s6">
@@ -17,7 +29,10 @@
             {{ object.buyer.country.name }}<br>
         </div>
     </div>
-    <h4 align="center">Invoice {{ object.series_number }}</h4><br>
+    <h4 align="center">
+        Invoice {{ object.series_number }}
+        <span class="new badge {% if object.is_draft %}grey{% else %}green{% endif %}" data-badge-caption="">{{ object.get_status_display }}</span>
+    </h4><br>
     <div class="row">
         <div class="col s6">{{ object.description }}</div>
         <div class="col s6 right-align">issued on <strong>{{ object.issue_date|naturalday }}</strong></div>
@@ -42,16 +57,80 @@
     </div>
     <br>
 </div>
+
 <div class="row">
-    <div class="col center-align">
-        <a class="btn-large" href="{% url 'registry-invoice-print' registry_id=object.registry.id pk=object.id %}" download>
-            Download PDF
-        </a>
+    <div class="col s12">
+        <div class="card">
+            <div class="card-content">
+                <span class="card-title">Timesheet</span>
+                {% with entries=object.timesheet_entries.all %}
+                {% if entries %}
+                <table class="striped">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Project</th>
+                            <th>Activity</th>
+                            <th class="right-align">Hours</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in entries %}
+                        <tr>
+                            <td>{{ entry.work_date }}</td>
+                            <td>{{ entry.project }}</td>
+                            <td>{{ entry.activity }}</td>
+                            <td class="right-align">{{ entry.hours|floatformat:"-2" }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <th colspan="3" class="right-align">Total</th>
+                            <th class="right-align">{{ object.timesheet_total_hours|floatformat:"-2" }}</th>
+                        </tr>
+                    </tfoot>
+                </table>
+                <p>
+                    {% if object.timesheet_reconciled %}
+                    <span class="green-text text-darken-2">&#10004; Balanced — {{ object.timesheet_total_hours|floatformat:"-2" }} h matches the invoiced {{ object.quantity }} h.</span>
+                    {% else %}
+                    <span class="red-text text-darken-2">&#9888; Timesheet totals {{ object.timesheet_total_hours|floatformat:"-2" }} h but the invoice is for {{ object.quantity }} h.</span>
+                    {% endif %}
+                </p>
+                {% else %}
+                <p class="grey-text">No timesheet entries yet.{% if object.is_draft %} Use “Edit timesheet” below to add them.{% endif %}</p>
+                {% endif %}
+                {% endwith %}
+            </div>
+        </div>
     </div>
-        <a class="btn-large" href="{% url 'registry-invoice-timesheet' registry_id=object.registry.id pk=object.id %}" download>
-            Fake Timesheet PDF
-        </a>
-    <div class="col center-align">
-    </div>
+</div>
+
+<div class="row center-align">
+    <a class="btn-large" href="{% url 'registry-invoice-print' registry_id=object.registry.id pk=object.id %}" download>
+        Download PDF
+    </a>
+    {% if object.timesheet_reconciled %}
+    <a class="btn-large" href="{% url 'registry-invoice-timesheet' registry_id=object.registry.id pk=object.id %}" download>
+        Download Timesheet PDF
+    </a>
+    {% else %}
+    <a class="btn-large disabled" title="Balance the timesheet with the invoiced hours first">
+        Download Timesheet PDF
+    </a>
+    {% endif %}
+    {% if object.is_draft %}
+    <a class="btn-large grey darken-1" href="{% url 'registry-invoice-timesheet-edit' registry_id=object.registry.id pk=object.id %}">
+        Edit timesheet
+    </a>
+    <form method="post" action="{% url 'registry-invoice-publish' registry_id=object.registry.id pk=object.id %}" style="display: inline-block;">
+        {% csrf_token %}
+        <button type="submit" class="btn-large green darken-1"
+                {% if not object.timesheet_reconciled %}disabled title="Balance the timesheet first"{% endif %}>
+            Publish
+        </button>
+    </form>
+    {% endif %}
 </div>
 {% endblock %}
