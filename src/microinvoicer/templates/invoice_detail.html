@@ -6,15 +6,20 @@
     <div class="row">
         <div class="col s6">
             <small>[seller]</small><br>
-            <strong><u>{{ object.seller.name }}</u></strong><br>
-            {{ object.seller.address }}<br>
-            {{ object.seller.country.name }}<br>
+            <strong><u>{{ object.seller_snapshot_name }}</u></strong><br>
+            {{ object.seller_snapshot_address }}<br>
+            {{ object.seller_snapshot_country_display }}<br>
         </div>
         <div class="col s6 right-align">
             <small>[buyer]</small><br>
-            <strong><u>{{ object.buyer.name }}</u></strong><br>
-            {{ object.buyer.address }}<br>
-            {{ object.buyer.country.name }}<br>
+            <strong><u>
+                <a href="{% url 'registry-client-detail' registry_id=object.registry.id pk=object.contract.client.id %}">{{ object.buyer_snapshot_name }}</a>
+            </u></strong><br>
+            {{ object.buyer_snapshot_address }}<br>
+            {{ object.buyer_snapshot_country_display }}<br>
+            <small class="grey-text">contract
+                <a href="{% url 'registry-contract-update' registry_id=object.registry.id pk=object.contract.id %}">{{ object.contract.registration_no }}</a>
+            </small>
         </div>
     </div>
     <h4 align="center">Invoice {{ object.series_number }}</h4><br>

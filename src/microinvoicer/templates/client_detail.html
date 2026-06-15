@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block content %}
+<div class="row">
+    <div class="col s12">
+        <div class="card">
+            <div class="card-content">
+                <span class="card-title grey-text text-darken-2">{{ client.name }}</span>
+                <div class="row">
+                    <div class="col s6">
+                        <p><strong>Owner:</strong> {{ client.owner_fullname }}</p>
+                        <p><strong>Registration:</strong> {{ client.registration_id }}</p>
+                        <p><strong>Fiscal code:</strong> {{ client.fiscal_code }}</p>
+                        <p><strong>Address:</strong> {{ client.address|linebreaksbr }}</p>
+                    </div>
+                    <div class="col s6">
+                        <p><strong>Country:</strong> {{ client.country.name }}</p>
+                        <p><strong>Bank:</strong> {{ client.bank_name }}</p>
+                        <p><strong>Account:</strong> {{ client.bank_account }}</p>
+                        {% if client.notes %}<p><strong>Notes:</strong> {{ client.notes|linebreaksbr }}</p>{% endif %}
+                    </div>
+                </div>
+                <small class="grey-text">Last updated: {{ client.updated_at|naturalday }}</small>
+            </div>
+            <div class="card-action">
+                <a href="{% url 'registry-client-update' registry_id=registry.id pk=client.id %}">Edit</a>
+                <a href="{% url 'registry-client-delete' registry_id=registry.id pk=client.id %}"
+                   class="red-text">Delete</a>
+                <a href="{% url 'registry-client-list' registry_id=registry.id %}" class="right">Back to list</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col s12">
+        <h6>Contracts ({{ contracts|length }})</h6>
+        <table>
+            <thead>
+                <tr>
+                    <th>Contract no.</th>
+                    <th>Date</th>
+                    <th>Rate</th>
+                    <th></th>
+                </tr>
+            </thead>
+            {% for contract in contracts %}
+            <tr>
+                <td>{{ contract.registration_no }}</td>
+                <td class="center-align">{{ contract.registration_date|naturalday }}</td>
+                <td class="center-align">{{ contract.unit_rate|floatformat:2|intcomma }} {{ contract.currency }} / {{ contract.unit }}</td>
+                <td class="center-align"><a href="{% url 'registry-contract-update' registry_id=registry.id pk=contract.id %}">&#x2317;</a></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="4"><em>No contracts for this client.</em></td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="col s12">
+        <h6>Invoices ({{ invoices|length }})</h6>
+        <table>
+            <thead>
+                <tr>
+                    <th>Invoice</th>
+                    <th>Date</th>
+                    <th>Amount</th>
+                </tr>
+            </thead>
+            {% for invoice in invoices %}
+            <tr>
+                <td>
+                    <a href="{% url 'registry-invoice-detail' registry_id=registry.id pk=invoice.id %}">
+                        {{ invoice.series_number }}
+                    </a>
+                </td>
+                <td class="center-align">{{ invoice.issue_date|naturalday }}</td>
+                <td class="center-align">{{ invoice.value|floatformat:2|intcomma }} {{ invoice.currency }}</td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="3"><em>No invoices for this client.</em></td></tr>
+            {% endfor %}
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -12,6 +12,38 @@ urlpatterns = [
     path("registry/add", views.RegistryCreateView.as_view(), name="registry-add"),
     path("registry/<int:pk>", views.RegistryUpdateView.as_view(), name="registry-update"),
     path("registry/<int:pk>/delete", views.RegistryDeleteView.as_view(), name="registry-delete"),
+    # Client management
+    path(
+        "registry/<registry_id>/clients",
+        views.ClientListView.as_view(),
+        name="registry-client-list",
+    ),
+    path(
+        "registry/<registry_id>/client/add",
+        views.ClientCreateView.as_view(),
+        name="registry-client-add",
+    ),
+    path(
+        "registry/<registry_id>/client/<pk>",
+        views.ClientDetailView.as_view(),
+        name="registry-client-detail",
+    ),
+    path(
+        "registry/<registry_id>/client/<pk>/edit",
+        views.ClientUpdateView.as_view(),
+        name="registry-client-update",
+    ),
+    path(
+        "registry/<registry_id>/client/<pk>/delete",
+        views.ClientDeleteView.as_view(),
+        name="registry-client-delete",
+    ),
+    path(
+        "registry/<registry_id>/client/check-duplicate",
+        views.ClientDuplicateCheckView.as_view(),
+        name="registry-client-check-duplicate",
+    ),
+    # Contract management
     path(
         "registry/<registry_id>/contract/add",
         views.ContractCreateView.as_view(),
@@ -27,6 +59,7 @@ urlpatterns = [
         views.ContractDeleteView.as_view(),
         name="registry-contract-delete",
     ),
+    # Invoice management
     path(
         "registry/<registry_id>/invoice/add",
         views.TimeInvoiceCreateView.as_view(),

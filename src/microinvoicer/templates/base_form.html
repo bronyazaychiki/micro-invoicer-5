@@ -9,6 +9,24 @@
                 <div class="card-content">
                     <span class="card-title grey-text text-darken-2">{% block formtitle %}{{ form_title }}{% endblock %}</span>
                     {% csrf_token %}
+                    {% if duplicate_matches %}
+                    <div class="card orange lighten-4" style="margin-bottom: 1em; padding: 1em;">
+                        <strong>Possible duplicate client(s) found:</strong>
+                        <ul>
+                        {% for match in duplicate_matches %}
+                            <li>
+                                <strong>{{ match.name }}</strong>
+                                ({{ match.fiscal_code }})
+                                <a href="{% url 'registry-client-detail' registry_id=registry.id pk=match.id %}" target="_blank">view</a>
+                            </li>
+                        {% endfor %}
+                        </ul>
+                        <input type="hidden" name="confirm_create" value="1">
+                        <p><small>Submit again to proceed anyway, or
+                            <a href="{% url 'registry-client-list' registry_id=registry.id %}">view all clients</a>.
+                        </small></p>
+                    </div>
+                    {% endif %}
                     {% block inside_form_content %}{% endblock %}
                     {% form %}
                     {% block formcontent %}{% endblock %}

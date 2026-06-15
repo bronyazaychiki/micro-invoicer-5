@@ -1,8 +1,10 @@
 """How about now."""
 from datetime import date, timedelta, datetime
-from django.http import FileResponse
+from django.http import FileResponse, JsonResponse
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
-from django.views.generic import TemplateView
+from django.views import View
+from django.views.generic import TemplateView, ListView
 from django.views.generic.detail import DetailView
 from django.views.generic.edit import CreateView, DeleteView, UpdateView
 from django.contrib.auth.mixins import LoginRequiredMixin
@@ -52,7 +54,7 @@ class MicroHomeView(LoginRequiredMixin, TemplateView):
         if self.request.user.is_authenticated:
             user = self.request.user
             context["registries"] = user.registries.prefetch_related(
-                "seller", "contracts", "invoices"
+                "seller", "contracts", "invoices", "clients"
             ).all()
 
         return context
@@ -210,61 +212,251 @@ class RegistryDeleteView(MicroFormMixin, DeleteView):
     template_name = "confirm_delete.html"
 
 
+# ---------------------------------------------------------------------------
+# Client CRUD views
+# ---------------------------------------------------------------------------
+
+
+class _RegistryScopedMixin:
+    """Ensures the view is scoped to a registry the user owns."""
+
+    def get_registry(self):
+        return get_object_or_404(
+            models.MicroRegistry,
+            pk=self.kwargs["registry_id"],
+            user=self.request.user,
+        )
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["registry"] = self.get_registry()
+        return context
+
+
+class ClientListView(_RegistryScopedMixin, LoginRequiredMixin, ListView):
+    model = models.Client
+    template_name = "client_list.html"
+    context_object_name = "clients"
+
+    def get_queryset(self):
+        self.registry = self.get_registry()
+        return (
+            models.Client.objects.filter(registry=self.registry)
+            .prefetch_related("contracts")
+            .order_by("name")
+        )
+
+
+class ClientCreateView(_RegistryScopedMixin, LoginRequiredMixin, CreateView):
+    model = models.Client
+    form_class = forms.ClientForm
+    form_title = "Add new client"
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["registry"] = self.get_registry()
+        return kwargs
+
+    def form_valid(self, form):
+        registry = self.get_registry()
+        # Check for duplicates — if found and not confirmed, re-render with warning
+        duplicates = form.cleaned_data.get("duplicate_matches")
+        if duplicates and not self.request.POST.get("confirm_create"):
+            return self.render_to_response(
+                self.get_context_data(form=form, duplicate_matches=duplicates)
+            )
+        form.instance.registry = registry
+        self.success_url = reverse_lazy(
+            "registry-client-list", kwargs={"registry_id": registry.pk}
+        )
+        return super().form_valid(form)
+
+
+class ClientDetailView(_RegistryScopedMixin, LoginRequiredMixin, DetailView):
+    model = models.Client
+    template_name = "client_detail.html"
+    context_object_name = "client"
+
+    def get_queryset(self):
+        registry = self.get_registry()
+        return models.Client.objects.filter(registry=registry)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        client = self.object
+        context["contracts"] = client.contracts.select_related("registry").all()
+        context["invoices"] = models.TimeInvoice.objects.filter(
+            contract__client=client
+        ).select_related("contract").order_by("-issue_date")
+        return context
+
+
+class ClientUpdateView(_RegistryScopedMixin, LoginRequiredMixin, UpdateView):
+    model = models.Client
+    form_class = forms.ClientForm
+    form_title = "Edit client"
+
+    def get_queryset(self):
+        registry = self.get_registry()
+        return models.Client.objects.filter(registry=registry)
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["registry"] = self.get_registry()
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        client = self.object
+        context["contract_count"] = client.contracts.count()
+        context["invoice_count"] = models.TimeInvoice.objects.filter(
+            contract__client=client
+        ).count()
+        return context
+
+    def form_valid(self, form):
+        duplicates = form.cleaned_data.get("duplicate_matches")
+        if duplicates and not self.request.POST.get("confirm_create"):
+            return self.render_to_response(
+                self.get_context_data(form=form, duplicate_matches=duplicates)
+            )
+        self.success_url = reverse_lazy(
+            "registry-client-detail",
+            kwargs={"registry_id": self.get_registry().pk, "pk": self.object.pk},
+        )
+        return super().form_valid(form)
+
+
+class ClientDeleteView(_RegistryScopedMixin, LoginRequiredMixin, DeleteView):
+    model = models.Client
+    template_name = "confirm_delete.html"
+    form_title = "Delete client"
+
+    def get_queryset(self):
+        registry = self.get_registry()
+        return models.Client.objects.filter(registry=registry)
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        client = self.object
+        contract_count = client.contracts.count()
+        context["contract_count"] = contract_count
+        if contract_count > 0:
+            context["delete_blocked"] = True
+            context["block_reason"] = (
+                f"This client has {contract_count} contract(s) and cannot be deleted. "
+                "Remove or reassign the contracts first."
+            )
+        return context
+
+    def get_success_url(self):
+        return reverse_lazy(
+            "registry-client-list",
+            kwargs={"registry_id": self.kwargs["registry_id"]},
+        )
+
+    def form_valid(self, form):
+        # On Django 4.2, DeleteView handles POST via form_valid (not delete()), so the
+        # guard must live here to actually run. A client still referenced by contracts
+        # is RESTRICT-protected at the DB; block it cleanly instead of letting it 500.
+        if self.object.contracts.exists():
+            return self.render_to_response(self.get_context_data())
+        return super().form_valid(form)
+
+
+class ClientDuplicateCheckView(_RegistryScopedMixin, LoginRequiredMixin, View):
+    """AJAX endpoint: returns JSON list of potential duplicate clients."""
+
+    def get(self, request, *args, **kwargs):
+        registry = self.get_registry()
+        name = request.GET.get("name", "").strip()
+        fiscal_code = request.GET.get("fiscal_code", "").strip()
+        exclude_pk = request.GET.get("exclude_pk")
+
+        matches = models.find_duplicate_clients(
+            registry=registry,
+            name=name,
+            fiscal_code=fiscal_code,
+            exclude_pk=exclude_pk,
+        )
+        data = [
+            {"id": c.pk, "name": c.name, "fiscal_code": c.fiscal_code}
+            for c in matches
+        ]
+        return JsonResponse(data, safe=False)
+
+
+# ---------------------------------------------------------------------------
+# Contract views (rewritten for Client)
+# ---------------------------------------------------------------------------
+
+
 class ContractCreateView(MicroFormMixin, CreateView):
     model = models.ServiceContract
     form_title = "Register new contract"
-    form_class = forms.ServiceContractForm
+    form_class = forms.ContractClientForm
+
+    def _get_registry(self):
+        return models.MicroRegistry.objects.get(pk=self.kwargs["registry_id"])
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["registry"] = self._get_registry()
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["registry"] = self._get_registry()
+        return context
 
     def form_valid(self, form):
-        """Create buyer instance before saving contract"""
-        buyer_data = {
-            field: form.cleaned_data[field]
-            for field in form.cleaned_data
-            if field in forms.FiscalEntityForm.declared_fields.keys()
-        }
-        buyer = models.FiscalEntity(**buyer_data)
-        buyer.save()
+        """Resolve client from selector or inline creation."""
+        # Check for duplicates in new client — if found and not confirmed, re-render
+        duplicates = form.cleaned_data.get("duplicate_matches")
+        if duplicates and not self.request.POST.get("confirm_create"):
+            return self.render_to_response(
+                self.get_context_data(form=form, duplicate_matches=duplicates)
+            )
 
-        form.instance.buyer = buyer
-        form.instance.registry = models.MicroRegistry.objects.get(pk=self.kwargs["registry_id"])
-
+        registry = models.MicroRegistry.objects.get(pk=self.kwargs["registry_id"])
+        client = form.get_or_create_client()
+        form.instance.client = client
+        form.instance.registry = registry
         return super().form_valid(form)
 
 
 class ContractUpdateView(MicroFormMixin, UpdateView):
     model = models.ServiceContract
     form_title = "Modify contract"
-    form_class = forms.ServiceContractForm
+    form_class = forms.ContractClientForm
+
+    def _get_registry(self):
+        return models.MicroRegistry.objects.get(pk=self.kwargs["registry_id"])
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["registry"] = self._get_registry()
+        return kwargs
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["registry"] = self._get_registry()
+        return context
 
     def get_initial(self):
         initial = super().get_initial()
-        if buyer_instance := self.object.buyer:
-            buyer_data = model_to_dict(
-                buyer_instance,
-                fields=[
-                    "name",
-                    "owner_fullname",
-                    "registration_id",
-                    "fiscal_code",
-                    "address",
-                    "country",
-                    "bank_account",
-                    "bank_name",
-                ],
-            )
-            initial.update(buyer_data)
+        initial["existing_client"] = self.object.client
         return initial
 
     def form_valid(self, form):
-        """Update buyer instance before saving contract"""
-        buyer_data = {
-            field: form.cleaned_data[field]
-            for field in form.cleaned_data
-            if field in forms.FiscalEntityForm.declared_fields.keys()
-        }
-        form.instance.buyer.__dict__.update(**buyer_data)
-        form.instance.buyer.save()
-
+        """Resolve client from selector or inline creation."""
+        duplicates = form.cleaned_data.get("duplicate_matches")
+        if duplicates and not self.request.POST.get("confirm_create"):
+            return self.render_to_response(
+                self.get_context_data(form=form, duplicate_matches=duplicates)
+            )
+        new_client = form.get_or_create_client()
+        form.instance.client = new_client
         return super().form_valid(form)
 
 
@@ -272,6 +464,33 @@ class ContractDeleteView(MicroFormMixin, DeleteView):
     model = models.ServiceContract
     form_title = "Throwing away contract"
     template_name = "confirm_delete.html"
+
+    def _invoice_count(self):
+        return models.TimeInvoice.objects.filter(contract=self.object).count()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        invoice_count = self._invoice_count()
+        context["invoice_count"] = invoice_count
+        if invoice_count > 0:
+            context["delete_blocked"] = True
+            context["block_reason"] = (
+                f"This contract has {invoice_count} invoice(s) and cannot be deleted. "
+                "Historical invoices must keep their originating contract."
+            )
+        return context
+
+    def form_valid(self, form):
+        # Deleting a contract referenced by invoices would raise a DB RestrictedError.
+        # Block it here (on the actual POST path) and re-show the reason instead of 500ing.
+        if self._invoice_count() > 0:
+            return self.render_to_response(self.get_context_data())
+        return super().form_valid(form)
+
+
+# ---------------------------------------------------------------------------
+# Invoice views
+# ---------------------------------------------------------------------------
 
 
 class TimeInvoiceCreateView(MicroFormMixin, CreateView):
@@ -301,7 +520,7 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
             initial["contract"] = last_invoice.contract
             initial["quantity"] = last_invoice.quantity
 
-            use_locale = "ro_RO" if last_invoice.contract.buyer.country == "RO" else "en_IE"
+            use_locale = "ro_RO" if last_invoice.contract.client.country == "RO" else "en_IE"
             with TemporaryLocale(use_locale):
                 description_template = Template(last_invoice.contract.invoicing_description)
                 local_context = Context(
@@ -315,13 +534,15 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         return initial
 
     def form_valid(self, form):
-        """Fill in the missing fields"""
+        """Fill in the missing fields and populate snapshots."""
         registry = self.kwargs["registry"]
         contract = form.instance.contract
+        client = contract.client
 
         form.instance.registry = registry
-        form.instance.seller = registry.seller
-        form.instance.buyer = contract.buyer
+        # Legacy FKs — set to None (snapshots are the source of truth now)
+        form.instance.seller = None
+        form.instance.buyer = None
         form.instance.series = registry.invoice_series
         form.instance.number = registry.next_invoice_no
         form.instance.status = models.InvoiceStatus.PUBLISHED
@@ -329,6 +550,10 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         form.instance.unit = contract.unit
         form.instance.unit_rate = contract.unit_rate
         form.instance.include_vat = registry.include_vat
+
+        # Populate snapshots
+        form.instance.populate_buyer_snapshot(client)
+        form.instance.populate_seller_snapshot(registry.seller)
 
         if form.cleaned_data["override_description"]:
             form.instance.description = form.cleaned_data["override_description"]

@@ -23,7 +23,7 @@
         <tr>
             <td style="text-align:center"><a href="{% url 'registry-invoice-detail' registry_id=registry.id pk=invoice.id %}">{{ invoice.series_number }}</a></td>
             <td style="text-align:center">{{ invoice.issue_date|naturalday }}</td>
-            <td style="text-align:center">{{ invoice.buyer.name }}</td>
+            <td style="text-align:center">{{ invoice.buyer_snapshot_name }}</td>
             <td style="text-align:center">{{ invoice.quantity }} {{invoice.unit}}</td>
             <td style="text-align:center">{{ invoice.value|floatformat:2|intcomma }} {{ invoice.currency }}</td>
             {% if forloop.first %}
@@ -49,13 +49,38 @@
         </tr>
         {% for contract in registry.contracts.all reversed %}
         <tr>
-            <td class="center-align">{{ contract.buyer.name }}</td>
+            <td class="center-align">{{ contract.client.name }}</td>
             <td class="center-align">{{ contract.unit_rate|floatformat:2|intcomma }} {{ contract.currency }} / {{ contract.unit }}</td>
             <td class="center-align"><a href="{% url 'registry-contract-update' registry_id=registry.id pk=contract.id %}">&#x2317;</a></td>
         </tr>
         {% endfor %}
         </table>
         <small align="right">{{ registry.contracts.all|length|intword }} contract{{ registry.contracts.all|length|pluralize}} found</small>
+
+
+        <table>
+        <tr>
+            <td>Clients</td>
+            <td></td>
+            <td class="center-align"><h5>
+                <a href="{% url 'registry-client-add' registry_id=registry.id %}">
+                &#x002B;
+                </a>
+            </h5></td>
+        </tr>
+        {% for client in registry.clients.all %}
+        <tr>
+            <td class="center-align">
+                <a href="{% url 'registry-client-detail' registry_id=registry.id pk=client.id %}">
+                    {{ client.name }}
+                </a>
+            </td>
+            <td class="center-align">{{ client.country.name }}</td>
+            <td class="center-align"><a href="{% url 'registry-client-update' registry_id=registry.id pk=client.id %}">&#x2317;</a></td>
+        </tr>
+        {% endfor %}
+        </table>
+        <small align="right">{{ registry.clients.all|length|intword }} client{{ registry.clients.all|length|pluralize }} found</small>
 
     {% endfor %}
     <hr>

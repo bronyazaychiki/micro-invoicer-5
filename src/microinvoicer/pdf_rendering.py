@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import locale
 import io
+from types import SimpleNamespace
 from django.template.loader import render_to_string
 import pdfkit
 
@@ -21,8 +22,26 @@ RENDER_OPTIONS = {
 }
 
 
+def _snapshot_namespace(prefix, invoice):
+    """Build a SimpleNamespace from snapshot fields for template compatibility."""
+    from django_countries import countries as countries_list
+
+    country_code = getattr(invoice, f"{prefix}_snapshot_country")
+    country_dict = dict(countries_list)
+    return SimpleNamespace(
+        name=getattr(invoice, f"{prefix}_snapshot_name"),
+        owner_fullname=getattr(invoice, f"{prefix}_snapshot_owner_fullname"),
+        registration_id=getattr(invoice, f"{prefix}_snapshot_registration_id"),
+        fiscal_code=getattr(invoice, f"{prefix}_snapshot_fiscal_code"),
+        address=getattr(invoice, f"{prefix}_snapshot_address"),
+        country=SimpleNamespace(name=country_dict.get(country_code, country_code)),
+        bank_account=getattr(invoice, f"{prefix}_snapshot_bank_account"),
+        bank_name=getattr(invoice, f"{prefix}_snapshot_bank_name"),
+    )
+
+
 def render_timesheet(invoice: TimeInvoice, timesheet):
-    country = invoice.buyer.country
+    country = invoice.buyer_snapshot_country
     international = True
     if country == "RO":
         locale.setlocale(locale.LC_ALL, "ro_RO")
@@ -33,8 +52,8 @@ def render_timesheet(invoice: TimeInvoice, timesheet):
         raise RuntimeError(f"Locale settings not defined for {country}")
 
     tr_invoice = translate_invoice(invoice, international)
-    tr_invoice["seller"] = invoice.seller
-    tr_invoice["buyer"] = invoice.buyer
+    tr_invoice["seller"] = _snapshot_namespace("seller", invoice)
+    tr_invoice["buyer"] = _snapshot_namespace("buyer", invoice)
     tr_invoice["tasks"] = timesheet["tasks"]
     options = dict(RENDER_OPTIONS)
     tr_invoice["invoice_title"] = options["title"] = (
@@ -48,7 +67,7 @@ def render_timesheet(invoice: TimeInvoice, timesheet):
 
 
 def render_invoice(invoice: TimeInvoice):
-    country = invoice.buyer.country
+    country = invoice.buyer_snapshot_country
     international = True
     if country == "RO":
         locale.setlocale(locale.LC_ALL, "ro_RO")
@@ -113,13 +132,13 @@ def create_header_data(invoice, international):
     header["left_first"] = "Supplier:" if international else "Furnizor:"
     header["right_first"] = "Buyer:" if international else "Beneficiar:"
     header["items"] = [
-        (invoice.seller.name, invoice.buyer.name),
-        (invoice.seller.registration_id, invoice.buyer.registration_id),
-        (invoice.seller.fiscal_code, invoice.buyer.fiscal_code),
-        (invoice.seller.address, invoice.buyer.address),
-        (invoice.seller.country.name, invoice.buyer.country.name),
-        (invoice.seller.bank_account, invoice.buyer.bank_account),
-        (invoice.seller.bank_name, invoice.buyer.bank_name),
+        (invoice.seller_snapshot_name, invoice.buyer_snapshot_name),
+        (invoice.seller_snapshot_registration_id, invoice.buyer_snapshot_registration_id),
+        (invoice.seller_snapshot_fiscal_code, invoice.buyer_snapshot_fiscal_code),
+        (invoice.seller_snapshot_address, invoice.buyer_snapshot_address),
+        (invoice.seller_snapshot_country_display, invoice.buyer_snapshot_country_display),
+        (invoice.seller_snapshot_bank_account, invoice.buyer_snapshot_bank_account),
+        (invoice.seller_snapshot_bank_name, invoice.buyer_snapshot_bank_name),
     ]
     return header
 

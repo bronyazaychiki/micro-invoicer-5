@@ -1,10 +1,12 @@
 from django.db import models
+from django.db.models import Q
 from django.core.mail import send_mail
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.contrib.auth.base_user import AbstractBaseUser
 from django.contrib.auth.models import PermissionsMixin
 from django.utils import timezone
 from django_countries.fields import CountryField
+from django_countries import countries as django_countries_list
 from datetime import date
 
 from .managers import MicroUserManager
@@ -103,8 +105,48 @@ class MicroRegistry(models.Model):
         return repr(self)
 
 
+class Client(models.Model):
+    """Master data for a buyer/client, scoped to a specific registry."""
+
+    registry = models.ForeignKey(
+        MicroRegistry, related_name="clients", on_delete=models.CASCADE
+    )
+
+    name = models.CharField(max_length=LONG_TEXT)
+    owner_fullname = models.CharField(max_length=LONG_TEXT)
+    registration_id = models.CharField(max_length=SHORT_TEXT)
+    fiscal_code = models.CharField(max_length=SHORT_TEXT)
+    address = models.TextField()
+    country = CountryField(default="RO")
+    bank_account = models.CharField(max_length=SHORT_TEXT)
+    bank_name = models.CharField(max_length=LONG_TEXT)
+
+    notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["registry", "fiscal_code"],
+                name="unique_client_fiscal_per_registry",
+            ),
+        ]
+
+    def __repr__(self) -> str:
+        return f"{self.name}"
+
+    def __str__(self):
+        return repr(self)
+
+    @property
+    def invoices(self):
+        return TimeInvoice.objects.filter(contract__client=self)
+
+
 class ServiceContract(models.Model):
-    buyer = models.ForeignKey(FiscalEntity, related_name="+", on_delete=models.RESTRICT)
+    client = models.ForeignKey(Client, related_name="contracts", on_delete=models.RESTRICT)
     registry = models.ForeignKey(MicroRegistry, related_name="contracts", on_delete=models.CASCADE)
 
     registration_no = models.CharField("Contract number", max_length=SHORT_TEXT)
@@ -118,7 +160,7 @@ class ServiceContract(models.Model):
     )
 
     def __repr__(self) -> str:
-        return f"{self.buyer!r}, {self.unit_rate} {self.currency}/{self.unit}"
+        return f"{self.client!r}, {self.unit_rate} {self.currency}/{self.unit}"
 
     def __str__(self):
         return repr(self)
@@ -126,8 +168,12 @@ class ServiceContract(models.Model):
 
 class TimeInvoice(models.Model):
     registry = models.ForeignKey(MicroRegistry, related_name="invoices", on_delete=models.CASCADE)
-    seller = models.ForeignKey(FiscalEntity, related_name="+", on_delete=models.RESTRICT)
-    buyer = models.ForeignKey(FiscalEntity, related_name="+", on_delete=models.RESTRICT)
+    seller = models.ForeignKey(
+        FiscalEntity, related_name="+", on_delete=models.SET_NULL, null=True, blank=True
+    )
+    buyer = models.ForeignKey(
+        FiscalEntity, related_name="+", on_delete=models.SET_NULL, null=True, blank=True
+    )
     contract = models.ForeignKey(ServiceContract, related_name="+", on_delete=models.RESTRICT)
 
     series = models.CharField(max_length=REALLY_SHORT)
@@ -148,6 +194,26 @@ class TimeInvoice(models.Model):
     quantity = models.IntegerField()
     include_vat = models.IntegerField(default=0)
 
+    # Buyer snapshot at time of invoice creation
+    buyer_snapshot_name = models.CharField(max_length=LONG_TEXT, blank=True)
+    buyer_snapshot_owner_fullname = models.CharField(max_length=LONG_TEXT, blank=True)
+    buyer_snapshot_registration_id = models.CharField(max_length=SHORT_TEXT, blank=True)
+    buyer_snapshot_fiscal_code = models.CharField(max_length=SHORT_TEXT, blank=True)
+    buyer_snapshot_address = models.TextField(blank=True)
+    buyer_snapshot_country = models.CharField(max_length=SHORT_TEXT, blank=True)
+    buyer_snapshot_bank_account = models.CharField(max_length=SHORT_TEXT, blank=True)
+    buyer_snapshot_bank_name = models.CharField(max_length=LONG_TEXT, blank=True)
+
+    # Seller snapshot at time of invoice creation
+    seller_snapshot_name = models.CharField(max_length=LONG_TEXT, blank=True)
+    seller_snapshot_owner_fullname = models.CharField(max_length=LONG_TEXT, blank=True)
+    seller_snapshot_registration_id = models.CharField(max_length=SHORT_TEXT, blank=True)
+    seller_snapshot_fiscal_code = models.CharField(max_length=SHORT_TEXT, blank=True)
+    seller_snapshot_address = models.TextField(blank=True)
+    seller_snapshot_country = models.CharField(max_length=SHORT_TEXT, blank=True)
+    seller_snapshot_bank_account = models.CharField(max_length=SHORT_TEXT, blank=True)
+    seller_snapshot_bank_name = models.CharField(max_length=LONG_TEXT, blank=True)
+
     @property
     def series_number(self):
         return f"{self.series}-{self.number:04}"
@@ -167,8 +233,93 @@ class TimeInvoice(models.Model):
     def contract_currency(self):
         return self.contract.currency
 
+    @property
+    def buyer_snapshot_country_display(self):
+        country_dict = dict(django_countries_list)
+        return country_dict.get(self.buyer_snapshot_country, self.buyer_snapshot_country)
+
+    @property
+    def seller_snapshot_country_display(self):
+        country_dict = dict(django_countries_list)
+        return country_dict.get(self.seller_snapshot_country, self.seller_snapshot_country)
+
+    def populate_buyer_snapshot(self, client):
+        """Copy current client data into buyer snapshot fields."""
+        self.buyer_snapshot_name = client.name
+        self.buyer_snapshot_owner_fullname = client.owner_fullname
+        self.buyer_snapshot_registration_id = client.registration_id
+        self.buyer_snapshot_fiscal_code = client.fiscal_code
+        self.buyer_snapshot_address = client.address
+        self.buyer_snapshot_country = str(client.country)
+        self.buyer_snapshot_bank_account = client.bank_account
+        self.buyer_snapshot_bank_name = client.bank_name
+
+    def populate_seller_snapshot(self, seller_entity):
+        """Copy current seller FiscalEntity data into seller snapshot fields."""
+        self.seller_snapshot_name = seller_entity.name
+        self.seller_snapshot_owner_fullname = seller_entity.owner_fullname
+        self.seller_snapshot_registration_id = seller_entity.registration_id
+        self.seller_snapshot_fiscal_code = seller_entity.fiscal_code
+        self.seller_snapshot_address = seller_entity.address
+        self.seller_snapshot_country = str(seller_entity.country)
+        self.seller_snapshot_bank_account = seller_entity.bank_account
+        self.seller_snapshot_bank_name = seller_entity.bank_name
+
     def __repr__(self) -> str:
-        return f"{self.series_number} for {self.buyer}"
+        return f"{self.series_number} for {self.buyer_snapshot_name}"
 
     def __str__(self):
         return repr(self)
+
+
+# ---------------------------------------------------------------------------
+# Utility: duplicate detection
+# ---------------------------------------------------------------------------
+
+_COMPANY_SUFFIXES = [
+    " srl", " s.r.l.", " s.r.l", " sa", " s.a.",
+    " ltd", " ltd.", " llc", " llc.", " gmbh", " ag", " bv", " nv",
+    " inc", " inc.", " limited", " co", " co.",
+]
+
+
+def _normalize_company_name(name):
+    """Strip common corporate suffixes and normalize for comparison."""
+    if not name:
+        return ""
+    cleaned = name.strip().lower()
+    for suffix in _COMPANY_SUFFIXES:
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)].strip()
+    return cleaned
+
+
+def find_duplicate_clients(registry, name, fiscal_code, exclude_pk=None):
+    """
+    Find potential duplicate clients within a registry.
+    Returns a list of matching Client objects.
+
+    Detection criteria (OR logic):
+    - Exact match on fiscal_code (case-insensitive, trimmed)
+    - Normalized name match (lowercased, stripped of common suffixes)
+    """
+    qs = Client.objects.filter(registry=registry)
+    if exclude_pk:
+        qs = qs.exclude(pk=exclude_pk)
+
+    matches = {}
+
+    # Exact fiscal code match
+    normalized_fiscal = fiscal_code.strip().upper() if fiscal_code else ""
+    if normalized_fiscal:
+        for c in qs.filter(fiscal_code__iexact=normalized_fiscal):
+            matches[c.pk] = c
+
+    # Normalized name match (done in Python since normalization strips suffixes)
+    normalized_name = _normalize_company_name(name)
+    if normalized_name:
+        for c in qs.exclude(pk__in=matches):
+            if _normalize_company_name(c.name) == normalized_name:
+                matches[c.pk] = c
+
+    return list(matches.values())

@@ -6,4 +6,18 @@
     <h6>{{ object }}</h6>
 </div>
 
+{% if delete_blocked %}
+<div class="card red lighten-4" style="padding: 1em;">
+    <strong>Cannot delete:</strong> {{ block_reason }}
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block formbuttons %}
+{% if not delete_blocked %}
+<button class="btn btn-large red" type="submit" style="background-color: rgba(180, 0, 0, 0.87)">Confirm delete</button>
+{% else %}
+<a class="btn btn-large grey" href="javascript:history.back()">Go back</a>
+{% endif %}
 {% endblock %}
