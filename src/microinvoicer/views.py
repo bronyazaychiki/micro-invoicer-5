@@ -1,7 +1,10 @@
 """How about now."""
 from datetime import date, timedelta, datetime
-from django.http import FileResponse
-from django.urls import reverse_lazy
+from django.db import transaction
+from django.http import FileResponse, HttpResponseForbidden
+from django.shortcuts import get_object_or_404, redirect
+from django.urls import reverse, reverse_lazy
+from django.views import View
 from django.views.generic import TemplateView
 from django.views.generic.detail import DetailView
 from django.views.generic.edit import CreateView, DeleteView, UpdateView
@@ -16,6 +19,21 @@ from decimal import Decimal
 
 from . import forms, models, pdf_rendering, micro_timesheet
 from .temporary_locale import TemporaryLocale
+
+
+def _apply_editable_invoice_fields(form, contract):
+    """Fill in description and attached-cost fields shared by create and edit."""
+    if form.cleaned_data.get("override_description"):
+        form.instance.description = form.cleaned_data["override_description"]
+    else:
+        form.instance.description = contract.invoicing_description
+
+    if form.cleaned_data.get("attached_cost") and form.cleaned_data.get("attached_description"):
+        form.instance.attached_description = form.cleaned_data["attached_description"]
+        form.instance.attached_cost = form.cleaned_data["attached_cost"]
+    else:
+        form.instance.attached_description = None
+        form.instance.attached_cost = None
 
 
 class IndexView(TemplateView):
@@ -47,13 +65,31 @@ class MicroHomeView(LoginRequiredMixin, TemplateView):
     template_name = "home.html"
 
     def get_context_data(self, **kwargs):
-        """Attach all registry info."""
+        """Attach all registry info, grouped by invoice status."""
         context = super().get_context_data(**kwargs)
         if self.request.user.is_authenticated:
             user = self.request.user
-            context["registries"] = user.registries.prefetch_related(
-                "seller", "contracts", "invoices"
-            ).all()
+            registries = list(
+                user.registries.prefetch_related("seller", "contracts", "invoices").all()
+            )
+            for registry in registries:
+                invoices = list(registry.invoices.all())
+                drafts = [i for i in invoices if i.is_draft]
+                published = [i for i in invoices if i.is_published]
+                stornos = [i for i in invoices if i.is_storno]
+
+                reversed_ids = {s.storno_of_id for s in stornos if s.storno_of_id}
+                for invoice in published:
+                    invoice.reversed_flag = invoice.id in reversed_ids
+
+                official = sorted(published + stornos, key=lambda i: i.number or 0)
+                registry.sorted_invoices = drafts + official
+                registry.draft_count = len(drafts)
+                registry.published_count = len(published)
+                registry.storno_count = len(stornos)
+                registry.net_total = sum((i.value for i in official), Decimal(0))
+
+            context["registries"] = registries
 
         return context
 
@@ -71,9 +107,10 @@ class ReportView(LoginRequiredMixin, TemplateView):
 
         context = super().get_context_data(**kwargs)
 
-        invoices = models.TimeInvoice.objects.filter(registry__user=self.request.user).order_by(
-            "-issue_date"
-        )
+        invoices = models.TimeInvoice.objects.filter(
+            registry__user=self.request.user,
+            status__in=[models.InvoiceStatus.PUBLISHED, models.InvoiceStatus.STORNO],
+        ).order_by("-issue_date")
 
         # build up the monthly / quartery / yearly total
         totals = dict()
@@ -274,6 +311,20 @@ class ContractDeleteView(MicroFormMixin, DeleteView):
     template_name = "confirm_delete.html"
 
 
+class DraftOnlyMixin:
+    """Restrict an action to invoices that are still drafts."""
+
+    def dispatch(self, request, *args, **kwargs):
+        invoice = self.get_object()
+        if not invoice.is_draft:
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry_id,
+                pk=invoice.pk,
+            )
+        return super().dispatch(request, *args, **kwargs)
+
+
 class TimeInvoiceCreateView(MicroFormMixin, CreateView):
     model = models.TimeInvoice
     form_title = "Issue new time invoice"
@@ -296,7 +347,7 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         registry = models.MicroRegistry.objects.get(pk=self.kwargs["registry_id"])
         initial["include_vat"] = registry.include_vat
         self.kwargs["registry"] = registry
-        last_invoice = registry.invoices.last()
+        last_invoice = registry.invoices.filter(status=models.InvoiceStatus.PUBLISHED).last()
         if last_invoice:
             initial["contract"] = last_invoice.contract
             initial["quantity"] = last_invoice.quantity
@@ -315,7 +366,7 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         return initial
 
     def form_valid(self, form):
-        """Fill in the missing fields"""
+        """Save the new invoice as an editable draft (no number assigned yet)."""
         registry = self.kwargs["registry"]
         contract = form.instance.contract
 
@@ -323,38 +374,133 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         form.instance.seller = registry.seller
         form.instance.buyer = contract.buyer
         form.instance.series = registry.invoice_series
-        form.instance.number = registry.next_invoice_no
-        form.instance.status = models.InvoiceStatus.PUBLISHED
+        form.instance.status = models.InvoiceStatus.DRAFT
         form.instance.currency = contract.invoicing_currency
         form.instance.unit = contract.unit
         form.instance.unit_rate = contract.unit_rate
         form.instance.include_vat = registry.include_vat
 
-        if form.cleaned_data["override_description"]:
-            form.instance.description = form.cleaned_data["override_description"]
-        else:
-            form.instance.description = contract.invoicing_description
+        _apply_editable_invoice_fields(form, contract)
 
-        if form.cleaned_data["attached_cost"] and form.cleaned_data["attached_description"]:
-            form.instance.attached_description = form.cleaned_data["attached_description"]
-            form.instance.attached_cost = form.cleaned_data["attached_cost"]
+        return super().form_valid(form)
 
-        response = super().form_valid(form)
-        registry.next_invoice_no += 1
-        registry.save()
-        return response
+    def get_success_url(self):
+        return reverse(
+            "registry-invoice-detail",
+            kwargs={"registry_id": self.object.registry_id, "pk": self.object.pk},
+        )
 
 
-class TimeInvoiceDeleteView(MicroFormMixin, DeleteView):
+class TimeInvoiceUpdateView(MicroFormMixin, DraftOnlyMixin, UpdateView):
     model = models.TimeInvoice
-    form_title = "Throwing away invoice"
+    form_title = "Edit draft invoice"
+    form_class = forms.TimeInvoiceForm
+
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["registry"] = self.object.registry
+        return kwargs
+
+    def get_initial(self):
+        initial = super().get_initial()
+        initial["override_description"] = self.object.description
+        return initial
+
+    def form_valid(self, form):
+        registry = self.object.registry
+        contract = form.instance.contract
+
+        form.instance.seller = registry.seller
+        form.instance.buyer = contract.buyer
+        form.instance.currency = contract.invoicing_currency
+        form.instance.unit = contract.unit
+        form.instance.unit_rate = contract.unit_rate
+        form.instance.include_vat = registry.include_vat
+
+        _apply_editable_invoice_fields(form, contract)
+
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse(
+            "registry-invoice-detail",
+            kwargs={"registry_id": self.object.registry_id, "pk": self.object.pk},
+        )
+
+
+class TimeInvoiceDeleteView(MicroFormMixin, DraftOnlyMixin, DeleteView):
+    model = models.TimeInvoice
+    form_title = "Throwing away draft invoice"
     template_name = "confirm_delete.html"
 
-    def delete(self, request, *args, **kwargs):
-        invoice = self.get_object()
-        invoice.registry.next_invoice_no -= 1
-        invoice.registry.save()
-        return super().delete(request, *args, **kwargs)
+
+class TimeInvoicePublishView(LoginRequiredMixin, View):
+    """Promote a draft into a published, numbered invoice."""
+
+    def post(self, request, *args, **kwargs):
+        invoice = get_object_or_404(
+            models.TimeInvoice, pk=kwargs["pk"], registry__user=request.user
+        )
+        if invoice.is_draft:
+            with transaction.atomic():
+                registry = models.MicroRegistry.objects.select_for_update().get(
+                    pk=invoice.registry_id
+                )
+                invoice.number = registry.next_invoice_no
+                invoice.status = models.InvoiceStatus.PUBLISHED
+                invoice.save(update_fields=["number", "status"])
+                registry.next_invoice_no += 1
+                registry.save(update_fields=["next_invoice_no"])
+        return redirect(
+            "registry-invoice-detail", registry_id=invoice.registry_id, pk=invoice.pk
+        )
+
+
+class TimeInvoiceStornoView(LoginRequiredMixin, View):
+    """Issue a storno (red invoice) that reverses a published invoice."""
+
+    def post(self, request, *args, **kwargs):
+        original = get_object_or_404(
+            models.TimeInvoice, pk=kwargs["pk"], registry__user=request.user
+        )
+        if not original.is_published or original.is_reversed:
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=original.registry_id,
+                pk=original.pk,
+            )
+        with transaction.atomic():
+            registry = models.MicroRegistry.objects.select_for_update().get(
+                pk=original.registry_id
+            )
+            storno = models.TimeInvoice(
+                registry=registry,
+                seller=original.seller,
+                buyer=original.buyer,
+                contract=original.contract,
+                storno_of=original,
+                series=original.series,
+                number=registry.next_invoice_no,
+                status=models.InvoiceStatus.STORNO,
+                description=(f"Storno of {original.series_number}: {original.description}")[
+                    : models.LONG_TEXT
+                ],
+                currency=original.currency,
+                conversion_rate=original.conversion_rate,
+                unit=original.unit,
+                unit_rate=original.unit_rate,
+                attached_cost=(-original.attached_cost if original.attached_cost else None),
+                attached_description=original.attached_description,
+                issue_date=date.today(),
+                quantity=-original.quantity,
+                include_vat=original.include_vat,
+            )
+            storno.save()
+            registry.next_invoice_no += 1
+            registry.save(update_fields=["next_invoice_no"])
+        return redirect(
+            "registry-invoice-detail", registry_id=storno.registry_id, pk=storno.pk
+        )
 
 
 class TimeInvoiceDetailView(LoginRequiredMixin, DetailView):
@@ -371,6 +517,8 @@ class TimeInvoicePrintView(LoginRequiredMixin, DetailView):
     def render_to_response(self, context, **response_kwargs):
         """Returns content of generated pdf"""
         invoice = context["object"]
+        if invoice.is_draft:
+            return HttpResponseForbidden("Draft invoices cannot be printed.")
         content = pdf_rendering.render_invoice(invoice)
         response = FileResponse(
             content,
@@ -390,6 +538,8 @@ class TimeInvoiceFakeTimesheetView(LoginRequiredMixin, DetailView):
     def render_to_response(self, context, **response_kwargs):
         """Returns content of generated pdf"""
         invoice = context["object"]
+        if not invoice.is_published:
+            return HttpResponseForbidden("Only published invoices have a timesheet.")
         if "last_month" in invoice.contract.invoicing_description:
             start_date = invoice.issue_date.replace(day=1) - timedelta(days=1)
             start_date = start_date.replace(day=1)

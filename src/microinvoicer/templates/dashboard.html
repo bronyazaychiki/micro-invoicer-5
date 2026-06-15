@@ -13,28 +13,58 @@
             <td></td>
             <td></td>
             <td></td>
+            <td></td>
             <td class="center-align"><h5>
                 <a href="{% url 'registry-invoice-add' registry_id=registry.id %}">
                 &#x002B;
                 </a>
             </h5></td>
         </tr>
-        {% for invoice in registry.invoices.all reversed %}
+        {% for invoice in registry.sorted_invoices %}
         <tr>
             <td style="text-align:center"><a href="{% url 'registry-invoice-detail' registry_id=registry.id pk=invoice.id %}">{{ invoice.series_number }}</a></td>
             <td style="text-align:center">{{ invoice.issue_date|naturalday }}</td>
             <td style="text-align:center">{{ invoice.buyer.name }}</td>
             <td style="text-align:center">{{ invoice.quantity }} {{invoice.unit}}</td>
             <td style="text-align:center">{{ invoice.value|floatformat:2|intcomma }} {{ invoice.currency }}</td>
-            {% if forloop.first %}
-                <td style="text-align:center"><a href="{% url 'registry-invoice-delete'  registry_id=registry.id pk=invoice.id %}">&#x274C;</a></td style="text-align:center">
-            {% else %}
-                <td></td>
-            {% endif %}
+            <td style="text-align:center">
+                {% if invoice.is_draft %}
+                    <span style="padding:2px 6px;border-radius:3px;background:#9e9e9e;color:#fff;font-size:0.7em">DRAFT</span>
+                {% elif invoice.is_storno %}
+                    <span style="padding:2px 6px;border-radius:3px;background:#e53935;color:#fff;font-size:0.7em">STORNO</span>
+                {% else %}
+                    <span style="padding:2px 6px;border-radius:3px;background:#43a047;color:#fff;font-size:0.7em">PUBLISHED</span>
+                {% endif %}
+            </td>
+            <td style="text-align:center">
+                {% if invoice.is_draft %}
+                    <a href="{% url 'registry-invoice-update' registry_id=registry.id pk=invoice.id %}" title="Edit">&#x270E;</a>
+                    <form method="post" action="{% url 'registry-invoice-publish' registry_id=registry.id pk=invoice.id %}" style="display:inline" onsubmit="return confirm('Publish this draft? A number will be assigned and it becomes read-only.');">
+                        {% csrf_token %}
+                        <button type="submit" style="border:none;background:none;cursor:pointer;padding:0" title="Publish">&#x2714;</button>
+                    </form>
+                    <a href="{% url 'registry-invoice-delete' registry_id=registry.id pk=invoice.id %}" title="Delete">&#x274C;</a>
+                {% elif invoice.is_storno %}
+                    <a href="{% url 'registry-invoice-print' registry_id=registry.id pk=invoice.id %}" title="Download" download>&#x2913;</a>
+                    {% if invoice.storno_of_id %}
+                        <a href="{% url 'registry-invoice-detail' registry_id=registry.id pk=invoice.storno_of_id %}" title="Original invoice">&#x21A9;</a>
+                    {% endif %}
+                {% else %}
+                    <a href="{% url 'registry-invoice-print' registry_id=registry.id pk=invoice.id %}" title="Download" download>&#x2913;</a>
+                    {% if invoice.reversed_flag %}
+                        <span class="red-text" title="Reversed by a storno">&#x29B0;</span>
+                    {% else %}
+                        <form method="post" action="{% url 'registry-invoice-storno' registry_id=registry.id pk=invoice.id %}" style="display:inline" onsubmit="return confirm('Issue a storno (red invoice) for {{ invoice.series_number }}?');">
+                            {% csrf_token %}
+                            <button type="submit" style="border:none;background:none;cursor:pointer;padding:0" title="Storno">&#x27F2;</button>
+                        </form>
+                    {% endif %}
+                {% endif %}
+            </td>
         </tr>
         {% endfor %}
         </table>
-        <small>{{ registry.invoices.all|length|intword }} invoice{{ registry.invoices.all|length|pluralize}} found</small>
+        <small>{{ registry.draft_count }} draft{{ registry.draft_count|pluralize }} &middot; {{ registry.published_count }} published &middot; {{ registry.storno_count }} storno{{ registry.storno_count|pluralize }} &middot; net {{ registry.net_total|floatformat:2|intcomma }}</small>
 
 
         <table>

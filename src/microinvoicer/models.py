@@ -129,10 +129,17 @@ class TimeInvoice(models.Model):
     seller = models.ForeignKey(FiscalEntity, related_name="+", on_delete=models.RESTRICT)
     buyer = models.ForeignKey(FiscalEntity, related_name="+", on_delete=models.RESTRICT)
     contract = models.ForeignKey(ServiceContract, related_name="+", on_delete=models.RESTRICT)
+    storno_of = models.ForeignKey(
+        "self",
+        related_name="storno_entries",
+        null=True,
+        blank=True,
+        on_delete=models.RESTRICT,
+    )
 
     series = models.CharField(max_length=REALLY_SHORT)
-    number = models.IntegerField()
-    status = models.IntegerField(choices=InvoiceStatus.choices)
+    number = models.IntegerField(null=True, blank=True)
+    status = models.IntegerField(choices=InvoiceStatus.choices, default=InvoiceStatus.DRAFT)
     description = models.CharField(max_length=LONG_TEXT, blank=True)
     currency = models.CharField(max_length=3, choices=AvailableCurrencies.choices)
     conversion_rate = models.DecimalField(
@@ -150,7 +157,26 @@ class TimeInvoice(models.Model):
 
     @property
     def series_number(self):
+        if self.number is None:
+            return f"{self.series} (draft)"
         return f"{self.series}-{self.number:04}"
+
+    @property
+    def is_draft(self):
+        return self.status == InvoiceStatus.DRAFT
+
+    @property
+    def is_published(self):
+        return self.status == InvoiceStatus.PUBLISHED
+
+    @property
+    def is_storno(self):
+        return self.status == InvoiceStatus.STORNO
+
+    @property
+    def is_reversed(self):
+        """True for a published invoice that already has a storno entry."""
+        return self.storno_entries.exists()
 
     @property
     def value(self):

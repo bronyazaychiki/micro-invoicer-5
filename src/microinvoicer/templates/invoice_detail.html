@@ -17,7 +17,18 @@
             {{ object.buyer.country.name }}<br>
         </div>
     </div>
-    <h4 align="center">Invoice {{ object.series_number }}</h4><br>
+    <h4 align="center">Invoice {{ object.series_number }}</h4>
+    <div align="center">
+        {% if object.is_draft %}
+            <span style="padding:2px 8px;border-radius:3px;background:#9e9e9e;color:#fff">DRAFT</span>
+        {% elif object.is_storno %}
+            <span style="padding:2px 8px;border-radius:3px;background:#e53935;color:#fff">STORNO</span>
+            {% if object.storno_of_id %} of <a href="{% url 'registry-invoice-detail' registry_id=object.registry.id pk=object.storno_of_id %}">the original invoice</a>{% endif %}
+        {% else %}
+            <span style="padding:2px 8px;border-radius:3px;background:#43a047;color:#fff">PUBLISHED</span>
+            {% if object.is_reversed %} &mdash; <span class="red-text">reversed by a storno</span>{% endif %}
+        {% endif %}
+    </div><br>
     <div class="row">
         <div class="col s6">{{ object.description }}</div>
         <div class="col s6 right-align">issued on <strong>{{ object.issue_date|naturalday }}</strong></div>
@@ -44,14 +55,25 @@
 </div>
 <div class="row">
     <div class="col center-align">
-        <a class="btn-large" href="{% url 'registry-invoice-print' registry_id=object.registry.id pk=object.id %}" download>
-            Download PDF
-        </a>
-    </div>
-        <a class="btn-large" href="{% url 'registry-invoice-timesheet' registry_id=object.registry.id pk=object.id %}" download>
-            Fake Timesheet PDF
-        </a>
-    <div class="col center-align">
+    {% if object.is_draft %}
+        <a class="btn-large" href="{% url 'registry-invoice-update' registry_id=object.registry.id pk=object.id %}">Edit</a>
+        <form method="post" action="{% url 'registry-invoice-publish' registry_id=object.registry.id pk=object.id %}" style="display:inline" onsubmit="return confirm('Publish this draft? A number will be assigned and it becomes read-only.');">
+            {% csrf_token %}
+            <button class="btn-large" type="submit">Publish</button>
+        </form>
+        <a class="btn-large red" href="{% url 'registry-invoice-delete' registry_id=object.registry.id pk=object.id %}">Delete</a>
+    {% elif object.is_storno %}
+        <a class="btn-large" href="{% url 'registry-invoice-print' registry_id=object.registry.id pk=object.id %}" download>Download PDF</a>
+    {% else %}
+        <a class="btn-large" href="{% url 'registry-invoice-print' registry_id=object.registry.id pk=object.id %}" download>Download PDF</a>
+        <a class="btn-large" href="{% url 'registry-invoice-timesheet' registry_id=object.registry.id pk=object.id %}" download>Fake Timesheet PDF</a>
+        {% if not object.is_reversed %}
+        <form method="post" action="{% url 'registry-invoice-storno' registry_id=object.registry.id pk=object.id %}" style="display:inline" onsubmit="return confirm('Issue a storno (red invoice) reversing this invoice?');">
+            {% csrf_token %}
+            <button class="btn-large red" type="submit">Storno</button>
+        </form>
+        {% endif %}
+    {% endif %}
     </div>
 </div>
 {% endblock %}
