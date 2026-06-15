@@ -20,6 +20,13 @@
         </header>
 
         <div class="container">
+        {% if messages %}
+        {% for message in messages %}
+        <div class="card-panel {% if message.tags == 'error' %}red{% elif message.tags == 'success' %}green{% elif message.tags == 'warning' %}orange{% else %}blue{% endif %} lighten-3" style="padding: 10px 15px; margin-bottom: 10px;">
+            {{ message }}
+        </div>
+        {% endfor %}
+        {% endif %}
         {% block content %}{% endblock %}
         </div>
 

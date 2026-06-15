@@ -1,4 +1,5 @@
 from django import forms
+from django.forms import inlineformset_factory
 from django_registration.forms import RegistrationForm
 from django_countries.fields import CountryField
 from material import Layout, Row
@@ -87,3 +88,44 @@ class TimeInvoiceForm(forms.ModelForm):
         registry = kwargs.pop("registry")
         super().__init__(*args, **kwargs)
         self.fields["contract"].queryset = models.ServiceContract.objects.filter(registry=registry)
+
+
+class TimesheetEntryForm(forms.ModelForm):
+    class Meta:
+        model = models.TimesheetEntry
+        fields = ["date", "project", "task", "hours"]
+        widgets = {
+            "date": forms.DateInput(
+                attrs={"type": "date", "class": "datepicker"},
+                format="%Y-%m-%d",
+            ),
+            "hours": forms.NumberInput(attrs={"step": "0.25", "min": "0.25"}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["date"].input_formats = ["%Y-%m-%d"]
+
+
+TimesheetEntryFormSet = inlineformset_factory(
+    models.TimeInvoice,
+    models.TimesheetEntry,
+    form=TimesheetEntryForm,
+    extra=5,
+    can_delete=True,
+)
+
+
+class TimesheetTemplateForm(forms.ModelForm):
+    class Meta:
+        model = models.TimesheetTemplate
+        fields = ["project", "task"]
+
+
+TimesheetTemplateFormSet = inlineformset_factory(
+    models.ServiceContract,
+    models.TimesheetTemplate,
+    form=TimesheetTemplateForm,
+    extra=3,
+    can_delete=True,
+)

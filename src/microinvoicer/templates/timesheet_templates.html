@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col s12 m10 l8 offset-l2 offset-m1">
+        <div class="card">
+            <div class="card-content">
+                <span class="card-title grey-text text-darken-2">
+                    {{ form_title }}
+                </span>
+                <p class="grey-text">
+                    Contract: {{ contract.buyer.name }} &middot;
+                    {{ contract.unit_rate }} {{ contract.currency }}/{{ contract.unit }}
+                </p>
+                <p class="grey-text" style="margin-bottom: 1em;">
+                    Define reusable project names and task descriptions.
+                    When creating a new invoice for this contract, you can import these as starting entries.
+                </p>
+
+                <form method="post" id="templates-form">
+                    {% csrf_token %}
+                    {{ formset.management_form }}
+
+                    {% if formset.non_form_errors %}
+                    <div class="card-panel red lighten-4">
+                        {% for error in formset.non_form_errors %}
+                        <p class="red-text">{{ error }}</p>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    <table class="striped">
+                        <thead>
+                            <tr>
+                                <th>Project Name</th>
+                                <th>Default Task Description</th>
+                                <th style="width:50px">Del</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for form in formset %}
+                            <tr>
+                                <td>
+                                    {{ form.id }}
+                                    {{ form.project }}
+                                    {% if form.project.errors %}<span class="red-text">{{ form.project.errors.0 }}</span>{% endif %}
+                                </td>
+                                <td>
+                                    {{ form.task }}
+                                    {% if form.task.errors %}<span class="red-text">{{ form.task.errors.0 }}</span>{% endif %}
+                                </td>
+                                <td class="center-align">
+                                    {% if form.instance.pk %}
+                                    {{ form.DELETE }}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </form>
+            </div>
+            <div class="card-action right-align">
+                <a href="{% url 'home' %}" class="btn-flat">Back to Dashboard</a>
+                <button form="templates-form" class="btn" type="submit"
+                        style="background-color: rgba(0, 0, 0, 0.87)">
+                    Save Templates
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -6,6 +6,7 @@ from django.contrib.auth.models import PermissionsMixin
 from django.utils import timezone
 from django_countries.fields import CountryField
 from datetime import date
+from decimal import Decimal
 
 from .managers import MicroUserManager
 
@@ -169,6 +170,55 @@ class TimeInvoice(models.Model):
 
     def __repr__(self) -> str:
         return f"{self.series_number} for {self.buyer}"
+
+    def __str__(self):
+        return repr(self)
+
+    @property
+    def is_draft(self):
+        return self.status == InvoiceStatus.DRAFT
+
+    @property
+    def is_published(self):
+        return self.status == InvoiceStatus.PUBLISHED
+
+
+class TimesheetEntry(models.Model):
+    invoice = models.ForeignKey(
+        TimeInvoice, related_name="timesheet_entries", on_delete=models.CASCADE
+    )
+    date = models.DateField("Entry date")
+    project = models.CharField(max_length=LONG_TEXT, blank=True)
+    task = models.CharField("Activity / task description", max_length=LONG_TEXT)
+    hours = models.DecimalField(
+        "Hours",
+        max_digits=8,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal("0.25"))],
+    )
+
+    class Meta:
+        ordering = ["date", "id"]
+
+    def __repr__(self):
+        return f"{self.date} — {self.task} ({self.hours}h)"
+
+    def __str__(self):
+        return repr(self)
+
+
+class TimesheetTemplate(models.Model):
+    contract = models.ForeignKey(
+        ServiceContract, related_name="timesheet_templates", on_delete=models.CASCADE
+    )
+    project = models.CharField("Project name", max_length=LONG_TEXT, blank=True)
+    task = models.CharField("Default task description", max_length=LONG_TEXT)
+
+    class Meta:
+        ordering = ["project", "task"]
+
+    def __repr__(self):
+        return f"{self.project}: {self.task}"
 
     def __str__(self):
         return repr(self)

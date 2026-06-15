@@ -1,7 +1,7 @@
 """How about now."""
 from datetime import date, timedelta, datetime
 from django.http import FileResponse
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.views.generic import TemplateView
 from django.views.generic.detail import DetailView
 from django.views.generic.edit import CreateView, DeleteView, UpdateView
@@ -14,8 +14,11 @@ from dateutil.rrule import rrule, MONTHLY
 from django.apps import apps
 from decimal import Decimal
 
-from . import forms, models, pdf_rendering, micro_timesheet
+from . import forms, models, pdf_rendering
 from .temporary_locale import TemporaryLocale
+from django.contrib import messages
+from django.shortcuts import redirect, get_object_or_404
+from django.forms import inlineformset_factory
 
 
 class IndexView(TemplateView):
@@ -324,7 +327,7 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         form.instance.buyer = contract.buyer
         form.instance.series = registry.invoice_series
         form.instance.number = registry.next_invoice_no
-        form.instance.status = models.InvoiceStatus.PUBLISHED
+        form.instance.status = models.InvoiceStatus.DRAFT
         form.instance.currency = contract.invoicing_currency
         form.instance.unit = contract.unit
         form.instance.unit_rate = contract.unit_rate
@@ -344,11 +347,35 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         registry.save()
         return response
 
+    def get_success_url(self):
+        """Redirect to invoice detail page after creation"""
+        return reverse(
+            "registry-invoice-detail",
+            kwargs={
+                "registry_id": self.kwargs["registry_id"],
+                "pk": self.object.pk,
+            },
+        )
+
 
 class TimeInvoiceDeleteView(MicroFormMixin, DeleteView):
     model = models.TimeInvoice
     form_title = "Throwing away invoice"
     template_name = "confirm_delete.html"
+
+    def dispatch(self, request, *args, **kwargs):
+        invoice = self.get_object()
+        if not invoice.is_draft:
+            messages.error(
+                request,
+                "Only draft invoices can be deleted. Revert to draft first.",
+            )
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry.id,
+                pk=invoice.id,
+            )
+        return super().dispatch(request, *args, **kwargs)
 
     def delete(self, request, *args, **kwargs):
         invoice = self.get_object()
@@ -360,6 +387,25 @@ class TimeInvoiceDeleteView(MicroFormMixin, DeleteView):
 class TimeInvoiceDetailView(LoginRequiredMixin, DetailView):
     model = models.TimeInvoice
     template_name = "invoice_detail.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        invoice = self.object
+        entries = invoice.timesheet_entries.all()
+        entries_total = sum((e.hours for e in entries), Decimal(0))
+
+        context["timesheet_entries"] = entries
+        context["entries_total"] = entries_total
+        context["entries_diff"] = invoice.quantity - entries_total
+        context["can_edit_timesheet"] = invoice.is_draft
+        context["can_publish"] = (
+            invoice.is_draft and entries_total == invoice.quantity and entries.exists()
+        )
+        context["can_revert"] = invoice.is_published
+        context["is_draft"] = invoice.is_draft
+        context["is_published"] = invoice.is_published
+
+        return context
 
 
 class TimeInvoicePrintView(LoginRequiredMixin, DetailView):
@@ -382,7 +428,7 @@ class TimeInvoicePrintView(LoginRequiredMixin, DetailView):
 
 
 class TimeInvoiceFakeTimesheetView(LoginRequiredMixin, DetailView):
-    """Generate fake timesheet as PDF file"""
+    """Generate timesheet as PDF file from real entries"""
 
     model = models.TimeInvoice
     response_class = FileResponse
@@ -390,15 +436,19 @@ class TimeInvoiceFakeTimesheetView(LoginRequiredMixin, DetailView):
     def render_to_response(self, context, **response_kwargs):
         """Returns content of generated pdf"""
         invoice = context["object"]
-        if "last_month" in invoice.contract.invoicing_description:
-            start_date = invoice.issue_date.replace(day=1) - timedelta(days=1)
-            start_date = start_date.replace(day=1)
-        else:
-            start_date = invoice.issue_date.replace(day=1)
-        timesheet = micro_timesheet.fake_timesheet(
-            invoice.quantity, "Dashboard", "Web Application", start_date
-        )
-        content = pdf_rendering.render_timesheet(invoice, timesheet)
+        entries = invoice.timesheet_entries.all()
+
+        if not entries.exists():
+            messages.error(
+                self.request, "Please add timesheet entries before downloading the PDF."
+            )
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry.id,
+                pk=invoice.id,
+            )
+
+        content = pdf_rendering.render_timesheet(invoice, entries)
         response = FileResponse(
             content,
             filename=f"{invoice.series_number}-timesheet.pdf",
@@ -406,3 +456,197 @@ class TimeInvoiceFakeTimesheetView(LoginRequiredMixin, DetailView):
             content_type="application/pdf",
         )
         return response
+
+
+class TimesheetEntryEditView(LoginRequiredMixin, TemplateView):
+    """Edit timesheet entries for a draft invoice"""
+
+    template_name = "timesheet_edit.html"
+
+    def get_invoice(self):
+        return get_object_or_404(
+            models.TimeInvoice,
+            pk=self.kwargs["pk"],
+            registry_id=self.kwargs["registry_id"],
+        )
+
+    def get(self, request, *args, **kwargs):
+        invoice = self.get_invoice()
+        if not invoice.is_draft:
+            messages.warning(request, "Timesheet entries can only be edited for draft invoices.")
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry.id,
+                pk=invoice.id,
+            )
+
+        formset = forms.TimesheetEntryFormSet(instance=invoice)
+
+        # Pre-fill from templates if requested and no entries exist yet
+        from_template = request.GET.get("from_template")
+        if from_template and not invoice.timesheet_entries.exists():
+            templates = invoice.contract.timesheet_templates.all()
+            if templates.exists():
+                initial = [
+                    {"project": t.project, "task": t.task, "date": invoice.issue_date, "hours": 1}
+                    for t in templates
+                ]
+                # Dynamically create formset with enough extra forms
+                DynamicFormSet = inlineformset_factory(
+                    models.TimeInvoice,
+                    models.TimesheetEntry,
+                    form=forms.TimesheetEntryForm,
+                    extra=max(len(initial), 5),
+                    can_delete=True,
+                )
+                formset = DynamicFormSet(instance=invoice, initial=initial)
+
+        return self._render(invoice, formset)
+
+    def post(self, request, *args, **kwargs):
+        invoice = self.get_invoice()
+        if not invoice.is_draft:
+            messages.warning(request, "Timesheet entries can only be edited for draft invoices.")
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry.id,
+                pk=invoice.id,
+            )
+
+        formset = forms.TimesheetEntryFormSet(request.POST, instance=invoice)
+        if formset.is_valid():
+            formset.save()
+            messages.success(request, "Timesheet entries saved.")
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry.id,
+                pk=invoice.id,
+            )
+
+        return self._render(invoice, formset)
+
+    def _render(self, invoice, formset):
+        entries = invoice.timesheet_entries.all()
+        entries_total = sum((e.hours for e in entries), Decimal(0))
+        templates = invoice.contract.timesheet_templates.all()
+
+        context = {
+            "invoice": invoice,
+            "formset": formset,
+            "entries_total": entries_total,
+            "entries_diff": invoice.quantity - entries_total,
+            "has_templates": templates.exists(),
+            "has_entries": entries.exists(),
+        }
+        return self.render_to_response(context)
+
+
+class TimeInvoicePublishView(LoginRequiredMixin, TemplateView):
+    """Publish a draft invoice after validating timesheet entries"""
+
+    def post(self, request, *args, **kwargs):
+        invoice = get_object_or_404(
+            models.TimeInvoice,
+            pk=kwargs["pk"],
+            registry_id=kwargs["registry_id"],
+        )
+
+        if not invoice.is_draft:
+            messages.info(request, "Invoice is already published.")
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry.id,
+                pk=invoice.id,
+            )
+
+        entries = invoice.timesheet_entries.all()
+        entries_total = sum((e.hours for e in entries), Decimal(0))
+
+        if entries_total != invoice.quantity:
+            messages.error(
+                request,
+                f"Cannot publish: timesheet entries total {entries_total} "
+                f"but invoice quantity is {invoice.quantity}. "
+                "They must match exactly.",
+            )
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry.id,
+                pk=invoice.id,
+            )
+
+        if not entries.exists():
+            messages.error(request, "Cannot publish: please add timesheet entries first.")
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry.id,
+                pk=invoice.id,
+            )
+
+        invoice.status = models.InvoiceStatus.PUBLISHED
+        invoice.save()
+        messages.success(request, "Invoice published successfully.")
+        return redirect(
+            "registry-invoice-detail",
+            registry_id=invoice.registry.id,
+            pk=invoice.id,
+        )
+
+
+class TimeInvoiceRevertView(LoginRequiredMixin, TemplateView):
+    """Revert a published invoice back to draft"""
+
+    def post(self, request, *args, **kwargs):
+        invoice = get_object_or_404(
+            models.TimeInvoice,
+            pk=kwargs["pk"],
+            registry_id=kwargs["registry_id"],
+        )
+
+        if not invoice.is_published:
+            messages.info(request, "Only published invoices can be reverted to draft.")
+            return redirect(
+                "registry-invoice-detail",
+                registry_id=invoice.registry.id,
+                pk=invoice.id,
+            )
+
+        invoice.status = models.InvoiceStatus.DRAFT
+        invoice.save()
+        messages.success(request, "Invoice reverted to draft. You can now edit timesheet entries.")
+        return redirect(
+            "registry-invoice-detail",
+            registry_id=invoice.registry.id,
+            pk=invoice.id,
+        )
+
+
+class TimesheetTemplateView(MicroFormMixin, UpdateView):
+    """Manage timesheet templates for a contract"""
+
+    model = models.ServiceContract
+    form_title = "Timesheet Templates"
+    template_name = "timesheet_templates.html"
+    fields = []  # We only use the formset
+
+    def get(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        formset = forms.TimesheetTemplateFormSet(instance=self.object)
+        return self._render(formset)
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+        formset = forms.TimesheetTemplateFormSet(request.POST, instance=self.object)
+        if formset.is_valid():
+            formset.save()
+            messages.success(request, "Templates saved.")
+            return self._render(forms.TimesheetTemplateFormSet(instance=self.object))
+        return self._render(formset)
+
+    def _render(self, formset):
+        context = {
+            "contract": self.object,
+            "formset": formset,
+            "form_title": self.form_title,
+        }
+        return self.render_to_response(context)

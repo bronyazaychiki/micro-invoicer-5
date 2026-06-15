@@ -13,6 +13,8 @@
             <td></td>
             <td></td>
             <td></td>
+            <td></td>
+            <td></td>
             <td class="center-align"><h5>
                 <a href="{% url 'registry-invoice-add' registry_id=registry.id %}">
                 &#x002B;
@@ -26,6 +28,11 @@
             <td style="text-align:center">{{ invoice.buyer.name }}</td>
             <td style="text-align:center">{{ invoice.quantity }} {{invoice.unit}}</td>
             <td style="text-align:center">{{ invoice.value|floatformat:2|intcomma }} {{ invoice.currency }}</td>
+            <td style="text-align:center">
+                {% if invoice.status == 0 %}
+                    <span style="color: #ff9800; font-size: 0.85em;">DRAFT</span>
+                {% endif %}
+            </td>
             {% if forloop.first %}
                 <td style="text-align:center"><a href="{% url 'registry-invoice-delete'  registry_id=registry.id pk=invoice.id %}">&#x274C;</a></td style="text-align:center">
             {% else %}
@@ -41,6 +48,7 @@
         <tr>
             <td>Contracts</td>
             <td></td>
+            <td></td>
             <td class="center-align"><h5>
                 <a href="{% url 'registry-contract-add' registry_id=registry.id %}">
                 &#x002B;
@@ -52,6 +60,7 @@
             <td class="center-align">{{ contract.buyer.name }}</td>
             <td class="center-align">{{ contract.unit_rate|floatformat:2|intcomma }} {{ contract.currency }} / {{ contract.unit }}</td>
             <td class="center-align"><a href="{% url 'registry-contract-update' registry_id=registry.id pk=contract.id %}">&#x2317;</a></td>
+            <td class="center-align"><a href="{% url 'registry-contract-templates' registry_id=registry.id pk=contract.id %}" title="Timesheet Templates">&#x1F4CB;</a></td>
         </tr>
         {% endfor %}
         </table>

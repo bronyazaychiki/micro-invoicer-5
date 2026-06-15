@@ -21,7 +21,7 @@ RENDER_OPTIONS = {
 }
 
 
-def render_timesheet(invoice: TimeInvoice, timesheet):
+def render_timesheet(invoice: TimeInvoice, entries):
     country = invoice.buyer.country
     international = True
     if country == "RO":
@@ -35,7 +35,15 @@ def render_timesheet(invoice: TimeInvoice, timesheet):
     tr_invoice = translate_invoice(invoice, international)
     tr_invoice["seller"] = invoice.seller
     tr_invoice["buyer"] = invoice.buyer
-    tr_invoice["tasks"] = timesheet["tasks"]
+    tr_invoice["tasks"] = [
+        {
+            "date": entry.date,
+            "project": entry.project,
+            "name": entry.task,
+            "duration": entry.hours,
+        }
+        for entry in entries
+    ]
     options = dict(RENDER_OPTIONS)
     tr_invoice["invoice_title"] = options["title"] = (
         "Annex: Timesheet Report" if international else "Anexa: Raport de Activitate"

@@ -1,0 +1,176 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block content %}
+<div class="row">
+    <div class="col s12">
+        <div class="card">
+            <div class="card-content">
+                <span class="card-title grey-text text-darken-2">
+                    Timesheet Entries — {{ invoice.series_number }}
+                </span>
+                <p class="grey-text">
+                    {{ invoice.buyer.name }} &middot;
+                    {{ invoice.quantity }} {{ invoice.unit }} &middot;
+                    {{ invoice.issue_date|date:"d M Y" }}
+                </p>
+
+                <form method="post" id="timesheet-form">
+                    {% csrf_token %}
+                    {{ formset.management_form }}
+
+                    {% if formset.non_form_errors %}
+                    <div class="card-panel red lighten-4">
+                        {% for error in formset.non_form_errors %}
+                        <p class="red-text">{{ error }}</p>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+
+                    <table class="striped">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Project</th>
+                                <th>Activity / Task</th>
+                                <th style="width:80px">Hours</th>
+                                <th style="width:50px">Del</th>
+                            </tr>
+                        </thead>
+                        <tbody id="entries-tbody">
+                            {% for form in formset %}
+                            <tr class="entry-row">
+                                <td>
+                                    {{ form.id }}
+                                    {{ form.date }}
+                                    {% if form.date.errors %}<span class="red-text">{{ form.date.errors.0 }}</span>{% endif %}
+                                </td>
+                                <td>
+                                    {{ form.project }}
+                                    {% if form.project.errors %}<span class="red-text">{{ form.project.errors.0 }}</span>{% endif %}
+                                </td>
+                                <td>
+                                    {{ form.task }}
+                                    {% if form.task.errors %}<span class="red-text">{{ form.task.errors.0 }}</span>{% endif %}
+                                </td>
+                                <td>
+                                    {{ form.hours }}
+                                    {% if form.hours.errors %}<span class="red-text">{{ form.hours.errors.0 }}</span>{% endif %}
+                                </td>
+                                <td class="center-align">
+                                    {% if form.instance.pk %}
+                                    {{ form.DELETE }}
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                        <tfoot>
+                            <tr class="bold-text">
+                                <td colspan="3" class="right-align">Entries Total</td>
+                                <td id="total-display">{{ entries_total }}</td>
+                                <td></td>
+                            </tr>
+                            <tr>
+                                <td colspan="3" class="right-align">
+                                    Invoice Quantity
+                                </td>
+                                <td>{{ invoice.quantity }}</td>
+                                <td></td>
+                            </tr>
+                            <tr>
+                                <td colspan="3" class="right-align">
+                                    <span id="diff-label">Difference</span>
+                                </td>
+                                <td id="diff-display" class="{% if entries_diff != 0 %}red-text{% else %}green-text{% endif %}">
+                                    {{ entries_diff }}
+                                </td>
+                                <td></td>
+                            </tr>
+                        </tfoot>
+                    </table>
+
+                    <div style="margin-top: 1em;">
+                        <a href="#" id="add-row-btn" class="btn-flat">+ Add row</a>
+                        {% if has_templates and not has_entries %}
+                        <a href="?from_template=1" class="btn-flat orange-text">Import from template</a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+            <div class="card-action right-align">
+                <a href="{% url 'registry-invoice-detail' registry_id=invoice.registry.id pk=invoice.id %}"
+                   class="btn-flat">Cancel</a>
+                <button form="timesheet-form" class="btn" type="submit"
+                        style="background-color: rgba(0, 0, 0, 0.87)">
+                    Save Entries
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extrajs %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var addBtn = document.getElementById('add-row-btn');
+    var tbody = document.getElementById('entries-tbody');
+    var totalForms = document.getElementById('id_timesheetentry_set-TOTAL_FORMS');
+
+    addBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        var formCount = parseInt(totalForms.value);
+        // Clone last row
+        var rows = tbody.querySelectorAll('.entry-row');
+        var lastRow = rows[rows.length - 1];
+        var newRow = lastRow.cloneNode(true);
+
+        // Update form index in all inputs
+        var inputs = newRow.querySelectorAll('input');
+        inputs.forEach(function(input) {
+            var name = input.name.replace(/-\d+-/, '-' + formCount + '-');
+            var id = input.id.replace(/-\d+-/, '-' + formCount + '-');
+            input.name = name;
+            input.id = id;
+            if (input.type !== 'hidden') {
+                input.value = '';
+            }
+        });
+
+        // Remove DELETE checkbox if present (new rows don't need it)
+        var deleteCheckbox = newRow.querySelector('input[name$="-DELETE"]');
+        if (deleteCheckbox) {
+            deleteCheckbox.parentElement.innerHTML = '';
+        }
+
+        tbody.appendChild(newRow);
+        totalForms.value = formCount + 1;
+    });
+
+    // Live total/diff calculation
+    function recalcTotals() {
+        var hoursInputs = tbody.querySelectorAll('input[name$="-hours"]');
+        var total = 0;
+        hoursInputs.forEach(function(input) {
+            var val = parseFloat(input.value);
+            if (!isNaN(val)) total += val;
+        });
+        var invoiceQty = {{ invoice.quantity }};
+        var diff = invoiceQty - total;
+        var totalEl = document.getElementById('total-display');
+        var diffEl = document.getElementById('diff-display');
+        totalEl.textContent = total.toFixed(2);
+        diffEl.textContent = diff.toFixed(2);
+        diffEl.className = diff === 0 ? 'green-text' : 'red-text';
+    }
+
+    tbody.addEventListener('input', function(e) {
+        if (e.target.name && e.target.name.indexOf('-hours') !== -1) {
+            recalcTotals();
+        }
+    });
+});
+</script>
+{% endblock %}

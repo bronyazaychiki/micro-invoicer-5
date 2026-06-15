@@ -18,6 +18,18 @@
         </div>
     </div>
     <h4 align="center">Invoice {{ object.series_number }}</h4><br>
+
+    <!-- Status badge -->
+    <div class="center-align" style="margin-bottom: 1em;">
+        {% if is_draft %}
+        <span class="chip orange white-text">DRAFT</span>
+        {% elif is_published %}
+        <span class="chip green white-text">PUBLISHED</span>
+        {% else %}
+        <span class="chip red white-text">STORNO</span>
+        {% endif %}
+    </div>
+
     <div class="row">
         <div class="col s6">{{ object.description }}</div>
         <div class="col s6 right-align">issued on <strong>{{ object.issue_date|naturalday }}</strong></div>
@@ -40,18 +52,143 @@
             </h5>
         </div>
     </div>
-    <br>
-</div>
-<div class="row">
-    <div class="col center-align">
-        <a class="btn-large" href="{% url 'registry-invoice-print' registry_id=object.registry.id pk=object.id %}" download>
-            Download PDF
+
+    <!-- Timesheet Preview Section -->
+    <div class="card">
+        <div class="card-content">
+            <span class="card-title grey-text text-darken-2">Timesheet Entries</span>
+
+            {% if timesheet_entries %}
+            <table class="striped">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Project</th>
+                        <th>Activity</th>
+                        <th style="width:80px">Hours</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in timesheet_entries %}
+                    <tr>
+                        <td>{{ entry.date|date:"d M Y" }}</td>
+                        <td>{{ entry.project }}</td>
+                        <td>{{ entry.task }}</td>
+                        <td>{{ entry.hours }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="bold-text">
+                        <td colspan="3" class="right-align">Total</td>
+                        <td>{{ entries_total }}</td>
+                    </tr>
+                    {% if entries_diff != 0 %}
+                    <tr>
+                        <td colspan="3" class="right-align red-text">
+                            Difference from invoice quantity
+                        </td>
+                        <td class="red-text">{{ entries_diff }}</td>
+                    </tr>
+                    {% endif %}
+                </tfoot>
+            </table>
+            {% else %}
+            <p class="grey-text">
+                No timesheet entries yet.
+                {% if can_edit_timesheet %}
+                Add entries to track the actual work for this invoice.
+                {% endif %}
+            </p>
+            {% endif %}
+        </div>
+
+        {% if can_edit_timesheet %}
+        <div class="card-action">
+            <a href="{% url 'registry-invoice-timesheet-edit' registry_id=object.registry.id pk=object.id %}"
+               class="btn">
+                Edit Entries
+            </a>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="row" style="margin-top: 1em;">
+        <div class="col center-align">
+            <a class="btn-large"
+               href="{% url 'registry-invoice-print' registry_id=object.registry.id pk=object.id %}"
+               download>
+                Download Invoice PDF
+            </a>
+        </div>
+    </div>
+
+    {% if timesheet_entries or is_published %}
+    <div class="row">
+        <div class="col center-align">
+            <a class="btn-large"
+               href="{% url 'registry-invoice-timesheet' registry_id=object.registry.id pk=object.id %}"
+               download>
+                Timesheet PDF
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Status Actions -->
+    {% if can_publish %}
+    <div class="row">
+        <div class="col center-align">
+            <form method="post" action="{% url 'registry-invoice-publish' registry_id=object.registry.id pk=object.id %}"
+                  style="display:inline">
+                {% csrf_token %}
+                <button class="btn-large green" type="submit">
+                    Publish Invoice
+                </button>
+            </form>
+        </div>
+    </div>
+    {% elif is_draft and timesheet_entries %}
+    <div class="row">
+        <div class="col center-align">
+            <p class="orange-text">
+                Cannot publish yet: entries total ({{ entries_total }}) must match invoice quantity ({{ object.quantity }})
+            </p>
+        </div>
+    </div>
+    {% elif is_draft and not timesheet_entries %}
+    <div class="row">
+        <div class="col center-align">
+            <p class="grey-text">
+                Add timesheet entries to enable publishing
+            </p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if can_revert %}
+    <div class="row">
+        <div class="col center-align">
+            <form method="post" action="{% url 'registry-invoice-revert' registry_id=object.registry.id pk=object.id %}"
+                  style="display:inline">
+                {% csrf_token %}
+                <button class="btn-flat orange-text" type="submit">
+                    Revert to Draft
+                </button>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Delete link (only for drafts) -->
+    {% if is_draft %}
+    <div class="row right-align">
+        <a class="red-text"
+           href="{% url 'registry-invoice-delete' registry_id=object.registry.id pk=object.id %}">
+            Delete this invoice
         </a>
     </div>
-        <a class="btn-large" href="{% url 'registry-invoice-timesheet' registry_id=object.registry.id pk=object.id %}" download>
-            Fake Timesheet PDF
-        </a>
-    <div class="col center-align">
-    </div>
+    {% endif %}
 </div>
 {% endblock %}
