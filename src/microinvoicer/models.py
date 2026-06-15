@@ -131,7 +131,8 @@ class TimeInvoice(models.Model):
     contract = models.ForeignKey(ServiceContract, related_name="+", on_delete=models.RESTRICT)
 
     series = models.CharField(max_length=REALLY_SHORT)
-    number = models.IntegerField()
+    # Drafts carry no official number; it is allocated only when published.
+    number = models.IntegerField(null=True, blank=True)
     status = models.IntegerField(choices=InvoiceStatus.choices)
     description = models.CharField(max_length=LONG_TEXT, blank=True)
     currency = models.CharField(max_length=3, choices=AvailableCurrencies.choices)
@@ -150,7 +151,22 @@ class TimeInvoice(models.Model):
 
     @property
     def series_number(self):
+        if self.number is None:
+            return f"{self.series}-DRAFT"
         return f"{self.series}-{self.number:04}"
+
+    @property
+    def is_draft(self):
+        return self.status == InvoiceStatus.DRAFT
+
+    @property
+    def is_published(self):
+        return self.status == InvoiceStatus.PUBLISHED
+
+    @property
+    def billing_month(self):
+        """First day of the month this invoice bills for (derived from issue_date)."""
+        return self.issue_date.replace(day=1)
 
     @property
     def value(self):

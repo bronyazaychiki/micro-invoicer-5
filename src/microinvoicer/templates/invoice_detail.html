@@ -17,7 +17,19 @@
             {{ object.buyer.country.name }}<br>
         </div>
     </div>
-    <h4 align="center">Invoice {{ object.series_number }}</h4><br>
+    <h4 align="center">Invoice {{ object.series_number }}</h4>
+    <div class="row center-align">
+        {% if object.is_draft %}
+        <span class="chip" style="background:#e0e0e0;">DRAFT &mdash; not yet numbered</span>
+        <form method="post" style="display:inline;"
+              action="{% url 'registry-invoice-publish' registry_id=object.registry.id pk=object.id %}">
+            {% csrf_token %}
+            <button class="btn" type="submit">Publish &amp; assign number</button>
+        </form>
+        {% else %}
+        <span class="chip" style="background:#a5d6a7;">Published</span>
+        {% endif %}
+    </div>
     <div class="row">
         <div class="col s6">{{ object.description }}</div>
         <div class="col s6 right-align">issued on <strong>{{ object.issue_date|naturalday }}</strong></div>

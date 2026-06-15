@@ -1,7 +1,10 @@
 """How about now."""
 from datetime import date, timedelta, datetime
 from django.http import FileResponse
-from django.urls import reverse_lazy
+from django.db import transaction
+from django.shortcuts import get_object_or_404, redirect
+from django.urls import reverse, reverse_lazy
+from django.views import View
 from django.views.generic import TemplateView
 from django.views.generic.detail import DetailView
 from django.views.generic.edit import CreateView, DeleteView, UpdateView
@@ -16,6 +19,137 @@ from decimal import Decimal
 
 from . import forms, models, pdf_rendering, micro_timesheet
 from .temporary_locale import TemporaryLocale
+
+
+def _localized_description(contract, target_date):
+    """Render a contract's monthly description template for `target_date`'s month."""
+    first_of_month = target_date.replace(day=1)
+    last_month = first_of_month - timedelta(days=1)
+    use_locale = "ro_RO" if contract.buyer.country == "RO" else "en_IE"
+    with TemporaryLocale(use_locale):
+        description_template = Template(contract.invoicing_description)
+        local_context = Context(
+            dict(
+                this_month=date.strftime(target_date, "%B %Y").title(),
+                last_month=date.strftime(last_month, "%B %Y").title(),
+            )
+        )
+        return description_template.render(local_context)
+
+
+def _snapshot_contract_fields(invoice, registry, contract):
+    """Copy seller/buyer/series and the pricing snapshot onto an invoice.
+
+    Mirrors what the single-invoice flow has always stamped server-side. Does
+    NOT assign `number` or `status` -- callers decide those, since drafts stay
+    unnumbered until published.
+    """
+    invoice.registry = registry
+    invoice.seller = registry.seller
+    invoice.buyer = contract.buyer
+    invoice.series = registry.invoice_series
+    invoice.currency = contract.invoicing_currency
+    invoice.unit = contract.unit
+    invoice.unit_rate = contract.unit_rate
+    invoice.include_vat = registry.include_vat
+
+
+def _contract_last_invoice(contract):
+    """Most recent invoice for a contract (by issue date), or None."""
+    return (
+        models.TimeInvoice.objects.filter(contract=contract)
+        .order_by("-issue_date", "-id")
+        .first()
+    )
+
+
+def _default_quantity(contract):
+    last = _contract_last_invoice(contract)
+    return last.quantity if last else 1
+
+
+def _default_conversion_rate(contract):
+    last = _contract_last_invoice(contract)
+    if last and last.conversion_rate:
+        return last.conversion_rate
+    if contract.currency == contract.invoicing_currency:
+        return Decimal(1)
+    return None
+
+
+def _parse_month(value):
+    """Parse a 'YYYY-MM' string into the first day of that month; default to this month."""
+    if value:
+        try:
+            return datetime.strptime(value, "%Y-%m").date().replace(day=1)
+        except ValueError:
+            pass
+    return date.today().replace(day=1)
+
+
+def _next_month(month):
+    if month.month == 12:
+        return month.replace(year=month.year + 1, month=1)
+    return month.replace(month=month.month + 1)
+
+
+def _issue_date_for_month(month):
+    """A date guaranteed to fall in `month`: today if it's the current month,
+    otherwise the last day of that month."""
+    today = date.today()
+    if month.year == today.year and month.month == today.month:
+        return today
+    return _next_month(month) - timedelta(days=1)
+
+
+def _billing_overview(user, month):
+    """Per-registry billing state for `month`, plus summary counts.
+
+    A contract is 'billed' for `month` when it has any invoice whose issue_date
+    falls in that month (drafts included, so re-running a batch won't duplicate).
+    Counts: pending = contracts with no invoice this month; drafts/published =
+    invoices of that status this month.
+    """
+    registries = user.registries.prefetch_related(
+        "seller", "contracts", "contracts__buyer", "invoices"
+    ).all()
+    groups = []
+    pending = drafts = published = 0
+    for registry in registries:
+        in_month = [
+            inv
+            for inv in registry.invoices.all()
+            if inv.issue_date.year == month.year and inv.issue_date.month == month.month
+        ]
+        by_contract = {}
+        for inv in in_month:
+            by_contract.setdefault(inv.contract_id, []).append(inv)
+            if inv.status == models.InvoiceStatus.DRAFT:
+                drafts += 1
+            elif inv.status == models.InvoiceStatus.PUBLISHED:
+                published += 1
+        rows = []
+        for contract in registry.contracts.all():
+            matching = by_contract.get(contract.id, [])
+            if not matching:
+                state = "pending"
+                pending += 1
+            elif any(i.status == models.InvoiceStatus.PUBLISHED for i in matching):
+                state = "published"
+            else:
+                state = "draft"
+            rows.append(
+                dict(
+                    contract=contract,
+                    state=state,
+                    duplicate=len(matching) > 1,
+                    invoices=matching,
+                    invoice=matching[0] if matching else None,
+                )
+            )
+        groups.append(dict(registry=registry, rows=rows))
+    summary = dict(pending=pending, drafts=drafts, published=published)
+    return groups, summary
 
 
 class IndexView(TemplateView):
@@ -54,6 +188,11 @@ class MicroHomeView(LoginRequiredMixin, TemplateView):
             context["registries"] = user.registries.prefetch_related(
                 "seller", "contracts", "invoices"
             ).all()
+
+            month = date.today().replace(day=1)
+            _, summary = _billing_overview(user, month)
+            context["billing_month_label"] = month.strftime("%B %Y")
+            context["billing_summary"] = summary
 
         return context
 
@@ -289,9 +428,6 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         initial = super().get_initial()
 
         today = date.today()
-        first_of_month = today.replace(day=1)
-        last_month = first_of_month - timedelta(days=1)
-
         initial["issue_date"] = today
         registry = models.MicroRegistry.objects.get(pk=self.kwargs["registry_id"])
         initial["include_vat"] = registry.include_vat
@@ -300,35 +436,20 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         if last_invoice:
             initial["contract"] = last_invoice.contract
             initial["quantity"] = last_invoice.quantity
-
-            use_locale = "ro_RO" if last_invoice.contract.buyer.country == "RO" else "en_IE"
-            with TemporaryLocale(use_locale):
-                description_template = Template(last_invoice.contract.invoicing_description)
-                local_context = Context(
-                    dict(
-                        this_month=date.strftime(today, "%B %Y").title(),
-                        last_month=date.strftime(last_month, "%B %Y").title(),
-                    )
-                )
-                initial["override_description"] = description_template.render(local_context)
+            initial["override_description"] = _localized_description(
+                last_invoice.contract, today
+            )
 
         return initial
 
     def form_valid(self, form):
-        """Fill in the missing fields"""
+        """Create the invoice as an unnumbered draft for later review/publish."""
         registry = self.kwargs["registry"]
         contract = form.instance.contract
 
-        form.instance.registry = registry
-        form.instance.seller = registry.seller
-        form.instance.buyer = contract.buyer
-        form.instance.series = registry.invoice_series
-        form.instance.number = registry.next_invoice_no
-        form.instance.status = models.InvoiceStatus.PUBLISHED
-        form.instance.currency = contract.invoicing_currency
-        form.instance.unit = contract.unit
-        form.instance.unit_rate = contract.unit_rate
-        form.instance.include_vat = registry.include_vat
+        _snapshot_contract_fields(form.instance, registry, contract)
+        form.instance.status = models.InvoiceStatus.DRAFT
+        form.instance.number = None
 
         if form.cleaned_data["override_description"]:
             form.instance.description = form.cleaned_data["override_description"]
@@ -339,10 +460,14 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
             form.instance.attached_description = form.cleaned_data["attached_description"]
             form.instance.attached_cost = form.cleaned_data["attached_cost"]
 
-        response = super().form_valid(form)
-        registry.next_invoice_no += 1
-        registry.save()
-        return response
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        """Land on the new draft's detail page so it can be reviewed and published."""
+        return reverse(
+            "registry-invoice-detail",
+            kwargs={"registry_id": self.object.registry_id, "pk": self.object.pk},
+        )
 
 
 class TimeInvoiceDeleteView(MicroFormMixin, DeleteView):
@@ -352,8 +477,13 @@ class TimeInvoiceDeleteView(MicroFormMixin, DeleteView):
 
     def delete(self, request, *args, **kwargs):
         invoice = self.get_object()
-        invoice.registry.next_invoice_no -= 1
-        invoice.registry.save()
+        registry = invoice.registry
+        # Only roll the counter back when deleting the most recently issued,
+        # numbered invoice. Drafts never consumed a number, so they must not
+        # decrement it (that would corrupt the official sequence).
+        if invoice.number is not None and invoice.number == registry.next_invoice_no - 1:
+            registry.next_invoice_no -= 1
+            registry.save()
         return super().delete(request, *args, **kwargs)
 
 
@@ -406,3 +536,100 @@ class TimeInvoiceFakeTimesheetView(LoginRequiredMixin, DetailView):
             content_type="application/pdf",
         )
         return response
+
+
+class TimeInvoicePublishView(LoginRequiredMixin, View):
+    """Allocate the official number and mark a draft invoice as published.
+
+    The number is drawn from the registry's running counter inside a
+    transaction that locks the registry row, so concurrent publishes can't
+    collide or skip numbers (the old create flow did this unlocked, which could
+    produce duplicates). Re-posting a published invoice is a no-op.
+    """
+
+    def post(self, request, *args, **kwargs):
+        registry_id = self.kwargs["registry_id"]
+        pk = self.kwargs["pk"]
+        with transaction.atomic():
+            registry = (
+                models.MicroRegistry.objects.select_for_update()
+                .filter(pk=registry_id, user=request.user)
+                .first()
+            )
+            if registry is not None:
+                invoice = get_object_or_404(models.TimeInvoice, pk=pk, registry=registry)
+                if invoice.status == models.InvoiceStatus.DRAFT:
+                    invoice.number = registry.next_invoice_no
+                    invoice.status = models.InvoiceStatus.PUBLISHED
+                    invoice.save()
+                    registry.next_invoice_no += 1
+                    registry.save()
+        return redirect("registry-invoice-detail", registry_id=registry_id, pk=pk)
+
+
+class BillingWorklistView(LoginRequiredMixin, TemplateView):
+    """Monthly billing to-do: which of the current user's contracts still need
+    an invoice for the selected period, which are drafted, which are published."""
+
+    template_name = "worklist.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        month = _parse_month(self.request.GET.get("month"))
+        groups, summary = _billing_overview(self.request.user, month)
+
+        prev_month = (month - timedelta(days=1)).replace(day=1)
+        context["groups"] = groups
+        context["summary"] = summary
+        context["month_label"] = month.strftime("%B %Y")
+        context["month_param"] = month.strftime("%Y-%m")
+        context["prev_month_param"] = prev_month.strftime("%Y-%m")
+        context["next_month_param"] = _next_month(month).strftime("%Y-%m")
+        context["created"] = self.request.GET.get("created")
+        context["skipped"] = self.request.GET.get("skipped")
+        return context
+
+
+class BillingWorklistBatchCreateView(LoginRequiredMixin, View):
+    """Create unnumbered DRAFT invoices for the selected contracts in one
+    transaction. Skips any contract already billed in the target month so
+    neither this batch nor a re-run produces duplicates, and never touches the
+    official number sequence."""
+
+    def post(self, request, *args, **kwargs):
+        month = _parse_month(request.POST.get("month"))
+        contract_ids = request.POST.getlist("contract_ids")
+
+        created = 0
+        skipped = 0
+        if contract_ids:
+            contracts = models.ServiceContract.objects.filter(
+                pk__in=contract_ids, registry__user=request.user
+            ).select_related("registry", "registry__seller", "buyer")
+            issue_dt = _issue_date_for_month(month)
+            with transaction.atomic():
+                for contract in contracts:
+                    already_billed = models.TimeInvoice.objects.filter(
+                        contract=contract,
+                        issue_date__year=month.year,
+                        issue_date__month=month.month,
+                    ).exists()
+                    if already_billed:
+                        skipped += 1
+                        continue
+
+                    invoice = models.TimeInvoice(contract=contract)
+                    _snapshot_contract_fields(invoice, contract.registry, contract)
+                    invoice.status = models.InvoiceStatus.DRAFT
+                    invoice.number = None
+                    invoice.issue_date = issue_dt
+                    invoice.quantity = _default_quantity(contract)
+                    invoice.conversion_rate = _default_conversion_rate(contract)
+                    invoice.description = _localized_description(contract, issue_dt)
+                    invoice.save()
+                    created += 1
+
+        url = reverse("billing-worklist")
+        return redirect(
+            f"{url}?month={month.strftime('%Y-%m')}&created={created}&skipped={skipped}"
+        )

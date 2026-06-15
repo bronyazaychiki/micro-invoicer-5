@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block content %}
+<div class="row">
+    <div class="col s12">
+        <h5>Billing to-do</h5>
+        <div class="card-panel grey lighten-4">
+            <a class="btn-small" href="?month={{ prev_month_param }}">&laquo; {{ prev_month_param }}</a>
+            <strong style="margin:0 16px;">{{ month_label }}</strong>
+            <a class="btn-small" href="?month={{ next_month_param }}">{{ next_month_param }} &raquo;</a>
+            <span style="margin-left:24px;">
+                <span class="chip" style="background:#ffcc80;">{{ summary.pending }} to invoice</span>
+                <span class="chip" style="background:#e0e0e0;">{{ summary.drafts }} draft{{ summary.drafts|pluralize }}</span>
+                <span class="chip" style="background:#a5d6a7;">{{ summary.published }} published</span>
+            </span>
+        </div>
+        {% if created or skipped %}
+        <div class="card-panel green lighten-4">
+            Created {{ created|default:0 }} draft{{ created|pluralize }}; skipped {{ skipped|default:0 }} already-billed.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<form method="post" action="{% url 'billing-worklist-batch-create' %}">
+    {% csrf_token %}
+    <input type="hidden" name="month" value="{{ month_param }}">
+
+    {% for group in groups %}
+    <h6 style="text-transform: uppercase;">{{ group.registry.seller.name }} - {{ group.registry.display_name }}</h6>
+    <table class="striped">
+        <thead>
+        <tr>
+            <th><label><input type="checkbox" class="select-all" /><span></span></label></th>
+            <th>Contract</th>
+            <th>Customer</th>
+            <th>Currency</th>
+            <th>Unit price</th>
+            <th>Status</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for row in group.rows %}
+        <tr>
+            <td>
+                {% if row.state == "pending" %}
+                <label><input type="checkbox" class="row-check" name="contract_ids" value="{{ row.contract.id }}" /><span></span></label>
+                {% endif %}
+            </td>
+            <td>{{ row.contract.registration_no }}</td>
+            <td>{{ row.contract.buyer.name }}</td>
+            <td>{{ row.contract.invoicing_currency|upper }}</td>
+            <td>{{ row.contract.unit_rate|floatformat:2|intcomma }} {{ row.contract.currency|upper }}/{{ row.contract.unit }}</td>
+            <td>
+                {% if row.duplicate %}
+                    <span class="chip" style="background:#ef9a9a;">&#9888; duplicate ({{ row.invoices|length }})</span>
+                {% elif row.state == "published" %}
+                    <span class="chip" style="background:#a5d6a7;">published</span>
+                {% elif row.state == "draft" %}
+                    <span class="chip" style="background:#e0e0e0;">draft</span>
+                {% else %}
+                    <span class="chip" style="background:#ffcc80;">pending</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if row.invoice %}
+                <a href="{% url 'registry-invoice-detail' registry_id=group.registry.id pk=row.invoice.id %}">view</a>
+                {% if row.invoices|length > 1 %}(+{{ row.invoices|length|add:"-1" }}){% endif %}
+                {% else %}
+                <a href="{% url 'registry-invoice-add' registry_id=group.registry.id %}">new&hellip;</a>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% empty %}
+    <p>No registries yet. <a href="{% url 'registry-add' %}">Add one</a> to start billing.</p>
+    {% endfor %}
+
+    {% if groups %}
+    <div class="row right-align">
+        <button class="btn" type="submit">Generate selected drafts</button>
+    </div>
+    {% endif %}
+</form>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll(".select-all").forEach(function (master) {
+        master.addEventListener("change", function () {
+            master.closest("table").querySelectorAll(".row-check").forEach(function (cb) {
+                cb.checked = master.checked;
+            });
+        });
+    });
+});
+</script>
+{% endblock %}

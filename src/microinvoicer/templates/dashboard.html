@@ -1,6 +1,15 @@
 {% load humanize %}
 
 <div class="row" id="dashboard">
+    {% if billing_summary %}
+    <div class="card-panel grey lighten-4">
+        <strong>{{ billing_month_label }}</strong> billing &mdash;
+        <span class="chip" style="background:#ffcc80;">{{ billing_summary.pending }} to invoice</span>
+        <span class="chip" style="background:#e0e0e0;">{{ billing_summary.drafts }} draft{{ billing_summary.drafts|pluralize }}</span>
+        <span class="chip" style="background:#a5d6a7;">{{ billing_summary.published }} published</span>
+        <a class="btn-small right" href="{% url 'billing-worklist' %}">Open billing to-do</a>
+    </div>
+    {% endif %}
     {% for registry in registries %}
         <h5><a style="text-transform: uppercase;" href='{% url "registry-update" pk=registry.id %}'>
             {{ registry.seller.name }} - {{ registry.display_name }}
