@@ -2,6 +2,18 @@
 {% load humanize %}
 {% block content %}
 
+<div class="row" style="margin-bottom: 0.5rem;">
+    {% if include_archived %}
+        <a href="{% url 'report' %}" class="btn btn-flat btn-small toggle-archived-link">
+            &#9745; Including archived registries — click to exclude
+        </a>
+    {% else %}
+        <a href="{% url 'report' %}?include_archived=1" class="btn btn-flat btn-small toggle-archived-link">
+            &#9744; Only active registries — click to include archived
+        </a>
+    {% endif %}
+</div>
+
 {{ totals|json_script:"totals-data" }}
 
 <div class="row">

@@ -95,6 +95,11 @@ class MicroRegistry(models.Model):
             MaxValueValidator(100),
         ),
     )
+    is_archived = models.BooleanField(default=False)
+
+    @property
+    def has_data(self):
+        return self.invoices.exists() or self.contracts.exists()
 
     def __repr__(self) -> str:
         return f"{self.display_name}, series {self.invoice_series}, {self.contracts.count()} contracts and ..."

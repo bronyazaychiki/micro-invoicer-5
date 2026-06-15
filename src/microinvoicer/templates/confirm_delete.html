@@ -4,6 +4,19 @@
 
 <div class="row">
     <h6>{{ object }}</h6>
+
+    {% if registry_has_data %}
+    <div class="card-panel red lighten-4" style="margin-top: 1rem;">
+        <strong>&#9888; Warning:</strong> This registry has
+        <strong>{{ invoice_count }} invoice{{ invoice_count|pluralize }}</strong> and
+        <strong>{{ contract_count }} contract{{ contract_count|pluralize }}</strong>.
+        Deleting it will <strong>permanently destroy</strong> all of this data — invoices,
+        contracts, and their PDF history cannot be recovered.
+        <br><br>
+        If you just want to stop using this registry while keeping its history intact,
+        <a href="{% url 'home' %}">go back and archive it instead</a>.
+    </div>
+    {% endif %}
 </div>
 
 {% endblock %}

@@ -37,7 +37,7 @@ Under each registry
 ### ToDO use cases
 
 Under each registry
-- Can *archive* a registry
+- ~~Can *archive* a registry~~ ✓ (done — archive hides registry from dashboard, blocks new invoices/contracts, keeps history and PDFs accessible)
 - New invoices are issued in *draft* state
 - Can publish a *draft* invoice (*published* invoices become read-only)
 - Can only remove *draft* invoices

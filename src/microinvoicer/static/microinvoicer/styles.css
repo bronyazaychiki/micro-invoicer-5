@@ -15,3 +15,77 @@ table.centered tbody tr td.amount, table.centered thead tr th.amount {
     text-align: right;
     padding-right: 34pt;
 }
+
+/* ── Registry status badges ── */
+
+.badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    vertical-align: middle;
+    letter-spacing: 0.05em;
+    margin-left: 6px;
+}
+
+.badge-active {
+    background-color: #c8e6c9;
+    color: #2e7d32;
+}
+
+.badge-archived {
+    background-color: #e0e0e0;
+    color: #616161;
+}
+
+/* ── Archived registry section ── */
+
+.archived-section {
+    opacity: 0.75;
+    border-top: 1px dashed #bdbdbd;
+    padding-top: 1rem;
+    margin-top: 0.5rem;
+}
+
+.archived-section:hover {
+    opacity: 1;
+}
+
+.archived-registry-title {
+    color: #757575;
+}
+
+.archived-table {
+    opacity: 0.85;
+}
+
+.registry-actions {
+    margin-top: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.archive-btn {
+    color: #757575 !important;
+    font-size: 0.85rem !important;
+    text-transform: none !important;
+}
+
+.unarchive-btn {
+    color: #1565c0 !important;
+    font-size: 0.85rem !important;
+    text-transform: none !important;
+}
+
+.toggle-archived-link {
+    color: #757575 !important;
+    font-size: 0.85rem !important;
+    text-transform: none !important;
+}
+
+.delete-archived-btn {
+    color: #c62828 !important;
+    font-size: 0.85rem !important;
+    text-transform: none !important;
+}

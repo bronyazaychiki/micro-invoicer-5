@@ -1,7 +1,9 @@
 """How about now."""
 from datetime import date, timedelta, datetime
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponseForbidden
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
+from django.views import View
 from django.views.generic import TemplateView
 from django.views.generic.detail import DetailView
 from django.views.generic.edit import CreateView, DeleteView, UpdateView
@@ -47,13 +49,16 @@ class MicroHomeView(LoginRequiredMixin, TemplateView):
     template_name = "home.html"
 
     def get_context_data(self, **kwargs):
-        """Attach all registry info."""
+        """Attach all registry info, separating active and archived."""
         context = super().get_context_data(**kwargs)
         if self.request.user.is_authenticated:
             user = self.request.user
-            context["registries"] = user.registries.prefetch_related(
-                "seller", "contracts", "invoices"
-            ).all()
+            qs = user.registries.prefetch_related("seller", "contracts", "invoices")
+            context["registries"] = qs.filter(is_archived=False)
+            archived = qs.filter(is_archived=True)
+            context["archived_registries"] = archived
+            context["has_archived"] = archived.exists()
+            context["show_archived"] = self.request.GET.get("show_archived") == "1"
 
         return context
 
@@ -71,9 +76,13 @@ class ReportView(LoginRequiredMixin, TemplateView):
 
         context = super().get_context_data(**kwargs)
 
-        invoices = models.TimeInvoice.objects.filter(registry__user=self.request.user).order_by(
-            "-issue_date"
-        )
+        include_archived = self.request.GET.get("include_archived") == "1"
+        context["include_archived"] = include_archived
+
+        invoices = models.TimeInvoice.objects.filter(registry__user=self.request.user)
+        if not include_archived:
+            invoices = invoices.filter(registry__is_archived=False)
+        invoices = invoices.order_by("-issue_date")
 
         # build up the monthly / quartery / yearly total
         totals = dict()
@@ -209,11 +218,51 @@ class RegistryDeleteView(MicroFormMixin, DeleteView):
     form_title = "Throwing away whole registry"
     template_name = "confirm_delete.html"
 
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        registry = self.object
+        invoice_count = registry.invoices.count()
+        contract_count = registry.contracts.count()
+        context["registry_has_data"] = invoice_count > 0 or contract_count > 0
+        context["invoice_count"] = invoice_count
+        context["contract_count"] = contract_count
+        return context
+
+
+class RegistryArchiveView(LoginRequiredMixin, View):
+    """Archive a registry (soft-hide, no data deletion)."""
+
+    http_method_names = ["post"]
+
+    def post(self, request, pk):
+        registry = get_object_or_404(models.MicroRegistry, pk=pk, user=request.user)
+        registry.is_archived = True
+        registry.save()
+        return redirect("home")
+
+
+class RegistryUnarchiveView(LoginRequiredMixin, View):
+    """Restore an archived registry to active."""
+
+    http_method_names = ["post"]
+
+    def post(self, request, pk):
+        registry = get_object_or_404(models.MicroRegistry, pk=pk, user=request.user)
+        registry.is_archived = False
+        registry.save()
+        return redirect("home")
+
 
 class ContractCreateView(MicroFormMixin, CreateView):
     model = models.ServiceContract
     form_title = "Register new contract"
     form_class = forms.ServiceContractForm
+
+    def dispatch(self, request, *args, **kwargs):
+        registry = get_object_or_404(models.MicroRegistry, pk=self.kwargs["registry_id"])
+        if registry.is_archived:
+            return HttpResponseForbidden("This registry is archived. Cannot add new contracts.")
+        return super().dispatch(request, *args, **kwargs)
 
     def form_valid(self, form):
         """Create buyer instance before saving contract"""
@@ -278,6 +327,12 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
     model = models.TimeInvoice
     form_title = "Issue new time invoice"
     form_class = forms.TimeInvoiceForm
+
+    def dispatch(self, request, *args, **kwargs):
+        registry = get_object_or_404(models.MicroRegistry, pk=self.kwargs["registry_id"])
+        if registry.is_archived:
+            return HttpResponseForbidden("This registry is archived. Cannot issue new invoices.")
+        return super().dispatch(request, *args, **kwargs)
 
     def get_form_kwargs(self):
         kwargs = super().get_form_kwargs()

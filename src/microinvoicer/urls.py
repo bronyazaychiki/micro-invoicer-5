@@ -13,6 +13,16 @@ urlpatterns = [
     path("registry/<int:pk>", views.RegistryUpdateView.as_view(), name="registry-update"),
     path("registry/<int:pk>/delete", views.RegistryDeleteView.as_view(), name="registry-delete"),
     path(
+        "registry/<int:pk>/archive",
+        views.RegistryArchiveView.as_view(),
+        name="registry-archive",
+    ),
+    path(
+        "registry/<int:pk>/unarchive",
+        views.RegistryUnarchiveView.as_view(),
+        name="registry-unarchive",
+    ),
+    path(
         "registry/<registry_id>/contract/add",
         views.ContractCreateView.as_view(),
         name="registry-contract-add",
