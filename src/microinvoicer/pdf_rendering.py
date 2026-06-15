@@ -60,7 +60,15 @@ def render_invoice(invoice: TimeInvoice):
 
     tr_invoice = translate_invoice(invoice, international)
     options = dict(RENDER_OPTIONS)
-    options["title"] = tr_invoice["invoice_title"]
+
+    if invoice.is_storno:
+        title = "STORNO INVOICE" if international else "FACTURA STORNO"
+    else:
+        title = tr_invoice["invoice_title"]
+
+    options["title"] = title
+    tr_invoice["invoice_title"] = title
+
     html_content = render_to_string("pdf_time_invoice_template.html", context=tr_invoice)
     pdf_content = pdfkit.from_string(html_content, options=options)
     buffer = io.BytesIO(pdf_content)
@@ -98,6 +106,9 @@ def translate_invoice(invoice: TimeInvoice, international) -> dict:
             invoice.attached_cost or 0, grouping=True, international=international
         ),
         invoice_value=locale.currency(invoice.value, grouping=True, international=international),
+        invoice_is_draft=invoice.is_draft,
+        invoice_is_storno=invoice.is_storno,
+        storno_of_series_number=invoice.storno_of.series_number if invoice.storno_of else None,
     )
 
     return data

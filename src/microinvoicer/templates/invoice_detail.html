@@ -4,6 +4,36 @@
 {% block content %}
 <div class="row">
     <div class="row">
+        <div style="text-align:center; margin-bottom: 1em;">
+            {% if object.is_draft %}
+                <span class="badge badge-draft" style="font-size: 1.2em; padding: 6px 16px;">DRAFT</span>
+            {% elif object.is_published %}
+                <span class="badge badge-published" style="font-size: 1.2em; padding: 6px 16px;">PUBLISHED</span>
+            {% elif object.is_storno %}
+                <span class="badge badge-storno" style="font-size: 1.2em; padding: 6px 16px;">STORNO</span>
+            {% endif %}
+        </div>
+
+        {% if object.is_storno and object.storno_of %}
+        <div class="card" style="background: #ffebee; text-align:center;">
+            <div class="card-content" style="padding: 12px;">
+                <span style="color: #c62828;">
+                    Storno of invoice <strong>{{ object.storno_of.series_number }}</strong>
+                </span>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if object.has_storno %}
+        <div class="card" style="background: #fff3e0; text-align:center;">
+            <div class="card-content" style="padding: 12px;">
+                <span style="color: #e65100;">
+                    This invoice has been stornoed by <strong>{{ object.storno_invoice.series_number }}</strong>
+                </span>
+            </div>
+        </div>
+        {% endif %}
+
         <div class="col s6">
             <small>[seller]</small><br>
             <strong><u>{{ object.seller.name }}</u></strong><br>
@@ -44,14 +74,29 @@
 </div>
 <div class="row">
     <div class="col center-align">
-        <a class="btn-large" href="{% url 'registry-invoice-print' registry_id=object.registry.id pk=object.id %}" download>
-            Download PDF
-        </a>
-    </div>
-        <a class="btn-large" href="{% url 'registry-invoice-timesheet' registry_id=object.registry.id pk=object.id %}" download>
-            Fake Timesheet PDF
-        </a>
-    <div class="col center-align">
+        {% if object.is_draft %}
+            <a class="btn-large" style="background-color: #2e7d32;" href="{% url 'registry-invoice-publish' registry_id=object.registry.id pk=object.id %}">
+                Publish
+            </a>
+            <a class="btn-large" style="background-color: #555;" href="{% url 'registry-invoice-edit' registry_id=object.registry.id pk=object.id %}">
+                Edit Draft
+            </a>
+            <a class="btn-large" style="background-color: #c62828;" href="{% url 'registry-invoice-delete' registry_id=object.registry.id pk=object.id %}">
+                Delete Draft
+            </a>
+        {% else %}
+            <a class="btn-large" href="{% url 'registry-invoice-print' registry_id=object.registry.id pk=object.id %}" download>
+                Download PDF
+            </a>
+            <a class="btn-large" href="{% url 'registry-invoice-timesheet' registry_id=object.registry.id pk=object.id %}" download>
+                Fake Timesheet PDF
+            </a>
+            {% if object.is_published and not object.has_storno %}
+            <a class="btn-large" style="background-color: #c62828;" href="{% url 'registry-invoice-storno' registry_id=object.registry.id pk=object.id %}">
+                Storno
+            </a>
+            {% endif %}
+        {% endif %}
     </div>
 </div>
 {% endblock %}

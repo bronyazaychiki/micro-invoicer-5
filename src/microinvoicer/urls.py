@@ -38,6 +38,21 @@ urlpatterns = [
         name="registry-invoice-detail",
     ),
     path(
+        "registry/<registry_id>/invoice/<pk>/edit",
+        views.TimeInvoiceUpdateView.as_view(),
+        name="registry-invoice-edit",
+    ),
+    path(
+        "registry/<registry_id>/invoice/<pk>/publish",
+        views.TimeInvoicePublishView.as_view(),
+        name="registry-invoice-publish",
+    ),
+    path(
+        "registry/<registry_id>/invoice/<pk>/storno",
+        views.TimeInvoiceStornoView.as_view(),
+        name="registry-invoice-storno",
+    ),
+    path(
         "registry/<registry_id>/invoice/<pk>/delete",
         views.TimeInvoiceDeleteView.as_view(),
         name="registry-invoice-delete",

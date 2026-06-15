@@ -21,6 +21,7 @@
                 height: 90%;
                 display: flex;
                 flex-direction: column;
+                position: relative;
             }
             .filler {
                 flex-grow: 1;
@@ -73,7 +74,9 @@
                 width: 5%;
             }
             .items th.qty,
-            .items td.qty,
+            .items td.qty {
+                width: 8%;
+            }
             .items th.unit,
             .items td.unit {
                 width: 8%;
@@ -101,13 +104,36 @@
             footer {
                 margin-top: 8em;
                 font-family: monospace;
-                /* font-size: 10pt; */
                 text-align: right;
                 color: darkgray;
+            }
+            .watermark {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%) rotate(-30deg);
+                font-size: 80pt;
+                font-weight: bold;
+                opacity: 0.08;
+                pointer-events: none;
+                white-space: nowrap;
+            }
+            .storno-note {
+                text-align: center;
+                color: #c62828;
+                font-size: 12pt;
+                font-weight: bold;
+                margin-top: 1em;
             }
         </style>
     </head>
     <body>
+        {% if invoice_is_draft %}
+        <div class="watermark">DRAFT</div>
+        {% elif invoice_is_storno %}
+        <div class="watermark">STORNO</div>
+        {% endif %}
+
         <header>
             <table class="full_width">
                 <thead>
@@ -148,6 +174,12 @@
             </table>
         </div>
 
+        {% if invoice_is_storno and storno_of_series_number %}
+        <div class="storno-note">
+            Storno of invoice {{ storno_of_series_number }}
+        </div>
+        {% endif %}
+
         <div class="items">
             <table class="full_width" style="table-layout: fixed">
                 <thead class="underline bold-text">
@@ -164,7 +196,7 @@
                     <th class="desc">Descriere</th>
                     <th class="qty">Cant.</th>
                     <th class="unit">U.M.</th>
-                    <th>Preț unitar</th>
+                    <th>Pre&#539; unitar</th>
                     <th>Valoare</th>
                     <th>TVA ({{ invoice_vat_perc }})</th>
                     {% endif %}
@@ -220,8 +252,8 @@
                 {% if international %} * VAT reverse charge (dir. 2008/8/EC)<br />
                 ** non-taxable in Romania art. 268 (1)<br />
                 and art. 278 (2) of Romanian Fiscal Code {% else %} * prezenta
-                factură circulă<br />
-                fără semnătură și ștampilă<br />
+                factur&#259; circul&#259;<br />
+                f&#259;r&#259; semn&#259;tur&#259; &#537;i &#537;tampil&#259;<br />
                 cf. art. 319 (29) din Codul Fiscal {% endif %}
             </p>
         </div>

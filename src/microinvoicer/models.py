@@ -131,8 +131,15 @@ class TimeInvoice(models.Model):
     contract = models.ForeignKey(ServiceContract, related_name="+", on_delete=models.RESTRICT)
 
     series = models.CharField(max_length=REALLY_SHORT)
-    number = models.IntegerField()
+    number = models.IntegerField(null=True, blank=True)
     status = models.IntegerField(choices=InvoiceStatus.choices)
+    storno_of = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.RESTRICT,
+        related_name="stornos",
+    )
     description = models.CharField(max_length=LONG_TEXT, blank=True)
     currency = models.CharField(max_length=3, choices=AvailableCurrencies.choices)
     conversion_rate = models.DecimalField(
@@ -150,7 +157,30 @@ class TimeInvoice(models.Model):
 
     @property
     def series_number(self):
+        if self.number is None:
+            return "DRAFT"
         return f"{self.series}-{self.number:04}"
+
+    @property
+    def is_draft(self):
+        return self.status == InvoiceStatus.DRAFT
+
+    @property
+    def is_published(self):
+        return self.status == InvoiceStatus.PUBLISHED
+
+    @property
+    def is_storno(self):
+        return self.status == InvoiceStatus.STORNO
+
+    @property
+    def storno_invoice(self):
+        """Return the storno invoice if one exists, else None."""
+        return self.stornos.first()
+
+    @property
+    def has_storno(self):
+        return self.stornos.exists()
 
     @property
     def value(self):
