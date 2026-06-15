@@ -15,3 +15,35 @@ table.centered tbody tr td.amount, table.centered thead tr th.amount {
     text-align: right;
     padding-right: 34pt;
 }
+
+/* Status badges */
+.badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 0.85em;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.badge-draft { background-color: #fff3e0; color: #e65100; }
+.badge-published { background-color: #e8f5e9; color: #2e7d32; }
+.badge-pending { background-color: #ffebee; color: #c62828; }
+.badge-storno { background-color: #f5f5f5; color: #757575; }
+
+/* Billing todo */
+.billing-todo-table input[type="checkbox"] { margin-top: 8px; }
+.month-nav {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1.5rem;
+    margin: 1rem 0;
+}
+.month-nav a {
+    font-size: 1.8rem;
+    text-decoration: none;
+    color: #333;
+    line-height: 1;
+}
+.billing-stats .card { margin-bottom: 0; }
+.billing-stats .card-title { font-size: 2rem; font-weight: bold; }

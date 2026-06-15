@@ -54,6 +54,7 @@ class ServiceContractForm(FiscalEntityForm):
             "unit",
             "invoicing_currency",
             "invoicing_description",
+            "is_active",
         ]
 
     def __init__(self, *args, **kwargs):

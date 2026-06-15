@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import F
 from django.core.mail import send_mail
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.contrib.auth.base_user import AbstractBaseUser
@@ -96,6 +97,14 @@ class MicroRegistry(models.Model):
         ),
     )
 
+    def allocate_invoice_number(self):
+        """Atomically reserve the next invoice number. Returns the allocated number."""
+        MicroRegistry.objects.filter(pk=self.pk).update(
+            next_invoice_no=F('next_invoice_no') + 1
+        )
+        self.refresh_from_db()
+        return self.next_invoice_no - 1
+
     def __repr__(self) -> str:
         return f"{self.display_name}, series {self.invoice_series}, {self.contracts.count()} contracts and ..."
 
@@ -116,6 +125,7 @@ class ServiceContract(models.Model):
     invoicing_description = models.CharField(
         "Service description template", max_length=LONG_TEXT, blank=True
     )
+    is_active = models.BooleanField(default=True)
 
     def __repr__(self) -> str:
         return f"{self.buyer!r}, {self.unit_rate} {self.currency}/{self.unit}"
@@ -128,7 +138,7 @@ class TimeInvoice(models.Model):
     registry = models.ForeignKey(MicroRegistry, related_name="invoices", on_delete=models.CASCADE)
     seller = models.ForeignKey(FiscalEntity, related_name="+", on_delete=models.RESTRICT)
     buyer = models.ForeignKey(FiscalEntity, related_name="+", on_delete=models.RESTRICT)
-    contract = models.ForeignKey(ServiceContract, related_name="+", on_delete=models.RESTRICT)
+    contract = models.ForeignKey(ServiceContract, related_name="invoices", on_delete=models.RESTRICT)
 
     series = models.CharField(max_length=REALLY_SHORT)
     number = models.IntegerField()

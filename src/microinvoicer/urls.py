@@ -43,6 +43,11 @@ urlpatterns = [
         name="registry-invoice-delete",
     ),
     path(
+        "registry/<registry_id>/invoice/<pk>/publish",
+        views.InvoicePublishView.as_view(),
+        name="registry-invoice-publish",
+    ),
+    path(
         "registry/<registry_id>/invoice/<pk>/print",
         views.TimeInvoicePrintView.as_view(),
         name="registry-invoice-print",
@@ -51,6 +56,21 @@ urlpatterns = [
         "registry/<registry_id>/invoice/<pk>/timesheet",
         views.TimeInvoiceFakeTimesheetView.as_view(),
         name="registry-invoice-timesheet",
+    ),
+    path(
+        "registry/<registry_id>/billing-todo/draft/<contract_pk>/",
+        views.SingleDraftView.as_view(),
+        name="billing-todo-single-draft",
+    ),
+    path(
+        "billing-todo/",
+        views.BillingTodoView.as_view(),
+        name="billing-todo",
+    ),
+    path(
+        "billing-todo/batch-draft/",
+        views.BatchDraftView.as_view(),
+        name="billing-todo-batch-draft",
     ),
     path("home/", views.MicroHomeView.as_view(), name="home"),
     path("report/", views.ReportView.as_view(), name="report"),

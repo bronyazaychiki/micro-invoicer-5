@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% load humanize %}
+
+{% block content %}
+<div class="row">
+    <div class="month-nav">
+        <a href="{% url 'billing-todo' %}?year={{ prev_year }}&month={{ prev_month }}" title="Previous month">
+            &laquo;
+        </a>
+        <h5 style="margin: 0;">{{ month_name }}</h5>
+        <a href="{% url 'billing-todo' %}?year={{ next_year }}&month={{ next_month }}" title="Next month">
+            &raquo;
+        </a>
+    </div>
+
+    {% if summary %}
+    <div class="col s12 center-align" style="margin-bottom: 1rem;">
+        <span class="badge badge-pending">{{ summary.pending }} Pending</span>
+        <span class="badge badge-draft">{{ summary.draft }} Draft</span>
+        <span class="badge badge-published">{{ summary.published }} Published</span>
+    </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'billing-todo-batch-draft' %}" id="batch-form">
+        {% csrf_token %}
+        <input type="hidden" name="target_year" value="{{ target_year }}">
+        <input type="hidden" name="target_month" value="{{ target_month }}">
+
+        {% for entry in todo_registries %}
+        <div class="card">
+            <div class="card-content">
+                <span class="card-title grey-text text-darken-2">
+                    {{ entry.registry.seller.name }}
+                    <small>&mdash; {{ entry.registry.display_name }}</small>
+                </span>
+
+                <table class="billing-todo-table" style="width: 100%;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid #ddd;">
+                            <th style="width: 30px;"></th>
+                            <th>Buyer</th>
+                            <th class="center-align">Rate</th>
+                            <th class="center-align">Invoice Currency</th>
+                            <th class="center-align">Status</th>
+                            <th class="center-align">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in entry.items %}
+                        <tr>
+                            <td>
+                                {% if item.status == "pending" %}
+                                <label>
+                                    <input type="checkbox" name="contract_ids" value="{{ item.contract.pk }}" class="contract-checkbox" />
+                                    <span></span>
+                                </label>
+                                {% endif %}
+                            </td>
+                            <td>{{ item.contract.buyer.name }}</td>
+                            <td class="center-align">
+                                {{ item.contract.unit_rate|floatformat:2|intcomma }}
+                                {{ item.contract.currency }}/{{ item.contract.unit }}
+                            </td>
+                            <td class="center-align">{{ item.contract.invoicing_currency|upper }}</td>
+                            <td class="center-align">
+                                {% if item.status == "pending" %}
+                                    <span class="badge badge-pending">Pending</span>
+                                {% elif item.status == "draft" %}
+                                    <span class="badge badge-draft">Draft</span>
+                                {% elif item.status == "published" %}
+                                    <span class="badge badge-published">Published</span>
+                                {% elif item.status == "storno" %}
+                                    <span class="badge badge-storno">Storno</span>
+                                {% endif %}
+                            </td>
+                            <td class="center-align">
+                                {% if item.status == "pending" %}
+                                    <form method="post" action="{% url 'billing-todo-single-draft' registry_id=entry.registry.id contract_pk=item.contract.pk %}" style="display:inline;">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="target_year" value="{{ target_year }}">
+                                        <input type="hidden" name="target_month" value="{{ target_month }}">
+                                        <button type="submit" class="btn-small" style="background-color: rgba(0,0,0,0.87); text-transform: none;">
+                                            Create Draft
+                                        </button>
+                                    </form>
+                                {% elif item.existing_invoice %}
+                                    <a href="{% url 'registry-invoice-detail' registry_id=entry.registry.id pk=item.existing_invoice.pk %}">
+                                        {{ item.existing_invoice.series_number }}
+                                    </a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% empty %}
+        <div class="card">
+            <div class="card-content center-align">
+                <p class="grey-text">
+                    {% if summary.pending == 0 and summary.draft == 0 and summary.published == 0 %}
+                        No active monthly contracts found.
+                    {% else %}
+                        All contracts have been invoiced for this month.
+                    {% endif %}
+                </p>
+            </div>
+        </div>
+        {% endfor %}
+
+        {% if summary.pending > 0 %}
+        <div class="fixed-action-btn" style="bottom: 24px; right: 24px;">
+            <button type="submit" class="btn-floating btn-large" style="background-color: #2e7d32;" id="batch-submit-btn" title="Generate selected drafts">
+                <i class="material-icons">add</i>
+            </button>
+        </div>
+        {% endif %}
+    </form>
+</div>
+
+<script>
+    (function() {
+        var $checkboxes = $('.contract-checkbox');
+        var $btn = $('#batch-submit-btn');
+
+        function updateCount() {
+            var count = $checkboxes.filter(':checked').length;
+            if (count > 0) {
+                $btn.find('i').text('done_all');
+                $btn.attr('title', 'Generate ' + count + ' draft(s)');
+            } else {
+                $btn.find('i').text('add');
+                $btn.attr('title', 'Select contracts first');
+            }
+        }
+
+        $checkboxes.on('change', updateCount);
+        updateCount();
+    })();
+</script>
+{% endblock %}

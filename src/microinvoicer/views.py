@@ -1,12 +1,17 @@
 """How about now."""
+import calendar
 from datetime import date, timedelta, datetime
 from django.http import FileResponse
-from django.urls import reverse_lazy
+from django.urls import reverse_lazy, reverse
 from django.views.generic import TemplateView
 from django.views.generic.detail import DetailView
 from django.views.generic.edit import CreateView, DeleteView, UpdateView
+from django.views import View
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.contrib.auth.views import LoginView
+from django.contrib import messages
+from django.shortcuts import get_object_or_404, redirect
+from django.db import transaction
 from django.forms.models import model_to_dict
 from django.template import Template, Context
 from django_registration.backends.one_step.views import RegistrationView
@@ -16,6 +21,22 @@ from decimal import Decimal
 
 from . import forms, models, pdf_rendering, micro_timesheet
 from .temporary_locale import TemporaryLocale
+
+
+def render_contract_description(contract, target_date):
+    """Render a contract's invoicing_description template for a given date."""
+    first_of_month = target_date.replace(day=1)
+    last_month = first_of_month - timedelta(days=1)
+    use_locale = "ro_RO" if contract.buyer.country == "RO" else "en_IE"
+    with TemporaryLocale(use_locale):
+        description_template = Template(contract.invoicing_description)
+        local_context = Context(
+            dict(
+                this_month=date.strftime(target_date, "%B %Y").title(),
+                last_month=date.strftime(last_month, "%B %Y").title(),
+            )
+        )
+        return description_template.render(local_context)
 
 
 class IndexView(TemplateView):
@@ -54,6 +75,37 @@ class MicroHomeView(LoginRequiredMixin, TemplateView):
             context["registries"] = user.registries.prefetch_related(
                 "seller", "contracts", "invoices"
             ).all()
+
+            # Monthly billing stats for current month
+            today = date.today()
+            invoices_this_month = models.TimeInvoice.objects.filter(
+                registry__user=user,
+                issue_date__year=today.year,
+                issue_date__month=today.month,
+            )
+            pending_count = (
+                models.ServiceContract.objects.filter(
+                    registry__user=user,
+                    is_active=True,
+                    unit=models.InvoicingUnits.MONTHLY,
+                )
+                .exclude(
+                    pk__in=models.TimeInvoice.objects.filter(
+                        issue_date__year=today.year,
+                        issue_date__month=today.month,
+                    ).values_list("contract_id", flat=True)
+                )
+                .count()
+            )
+            context["monthly_stats"] = {
+                "draft_count": invoices_this_month.filter(
+                    status=models.InvoiceStatus.DRAFT
+                ).count(),
+                "published_count": invoices_this_month.filter(
+                    status=models.InvoiceStatus.PUBLISHED
+                ).count(),
+                "pending_count": pending_count,
+            }
 
         return context
 
@@ -289,8 +341,6 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         initial = super().get_initial()
 
         today = date.today()
-        first_of_month = today.replace(day=1)
-        last_month = first_of_month - timedelta(days=1)
 
         initial["issue_date"] = today
         registry = models.MicroRegistry.objects.get(pk=self.kwargs["registry_id"])
@@ -300,17 +350,9 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         if last_invoice:
             initial["contract"] = last_invoice.contract
             initial["quantity"] = last_invoice.quantity
-
-            use_locale = "ro_RO" if last_invoice.contract.buyer.country == "RO" else "en_IE"
-            with TemporaryLocale(use_locale):
-                description_template = Template(last_invoice.contract.invoicing_description)
-                local_context = Context(
-                    dict(
-                        this_month=date.strftime(today, "%B %Y").title(),
-                        last_month=date.strftime(last_month, "%B %Y").title(),
-                    )
-                )
-                initial["override_description"] = description_template.render(local_context)
+            initial["override_description"] = render_contract_description(
+                last_invoice.contract, today
+            )
 
         return initial
 
@@ -324,7 +366,7 @@ class TimeInvoiceCreateView(MicroFormMixin, CreateView):
         form.instance.buyer = contract.buyer
         form.instance.series = registry.invoice_series
         form.instance.number = registry.next_invoice_no
-        form.instance.status = models.InvoiceStatus.PUBLISHED
+        form.instance.status = models.InvoiceStatus.DRAFT
         form.instance.currency = contract.invoicing_currency
         form.instance.unit = contract.unit
         form.instance.unit_rate = contract.unit_rate
@@ -350,10 +392,18 @@ class TimeInvoiceDeleteView(MicroFormMixin, DeleteView):
     form_title = "Throwing away invoice"
     template_name = "confirm_delete.html"
 
+    def dispatch(self, request, *args, **kwargs):
+        invoice = self.get_object()
+        if invoice.status != models.InvoiceStatus.DRAFT:
+            messages.error(request, "Only draft invoices can be deleted.")
+            return redirect("home")
+        return super().dispatch(request, *args, **kwargs)
+
     def delete(self, request, *args, **kwargs):
         invoice = self.get_object()
-        invoice.registry.next_invoice_no -= 1
-        invoice.registry.save()
+        if invoice.number == invoice.registry.next_invoice_no - 1:
+            invoice.registry.next_invoice_no -= 1
+            invoice.registry.save()
         return super().delete(request, *args, **kwargs)
 
 
@@ -406,3 +456,242 @@ class TimeInvoiceFakeTimesheetView(LoginRequiredMixin, DetailView):
             content_type="application/pdf",
         )
         return response
+
+
+class InvoicePublishView(LoginRequiredMixin, View):
+    """Publish a draft invoice."""
+
+    def post(self, request, registry_id, pk):
+        invoice = get_object_or_404(models.TimeInvoice, pk=pk, registry_id=registry_id)
+        if invoice.status != models.InvoiceStatus.DRAFT:
+            messages.error(request, "Only draft invoices can be published.")
+            return redirect("home")
+        invoice.status = models.InvoiceStatus.PUBLISHED
+        invoice.save()
+        messages.success(request, f"Invoice {invoice.series_number} published.")
+        return redirect(
+            reverse("registry-invoice-detail", kwargs={"registry_id": registry_id, "pk": pk})
+        )
+
+
+def _create_draft_invoice(contract, issue_date, registry):
+    """Create a single draft invoice for a contract. Must be called inside transaction.atomic()."""
+    number = registry.allocate_invoice_number()
+    description = render_contract_description(contract, issue_date)
+    return models.TimeInvoice.objects.create(
+        registry=registry,
+        seller=registry.seller,
+        buyer=contract.buyer,
+        contract=contract,
+        series=registry.invoice_series,
+        number=number,
+        status=models.InvoiceStatus.DRAFT,
+        description=description,
+        currency=contract.invoicing_currency,
+        unit=contract.unit,
+        unit_rate=contract.unit_rate,
+        issue_date=issue_date,
+        quantity=1,
+        include_vat=registry.include_vat,
+    )
+
+
+class SingleDraftView(LoginRequiredMixin, View):
+    """Quick-create a single draft invoice from the billing todo."""
+
+    def post(self, request, registry_id, contract_pk):
+        registry = get_object_or_404(
+            models.MicroRegistry, pk=registry_id, user=request.user
+        )
+        contract = get_object_or_404(
+            models.ServiceContract, pk=contract_pk, registry=registry, is_active=True
+        )
+
+        # Parse target month from POST data or default to current month
+        try:
+            target_year = int(request.POST.get("target_year", date.today().year))
+            target_month = int(request.POST.get("target_month", date.today().month))
+            issue_date = date(target_year, target_month, 1)
+        except (ValueError, TypeError):
+            issue_date = date.today().replace(day=1)
+
+        # Duplicate check
+        existing = models.TimeInvoice.objects.filter(
+            contract=contract,
+            issue_date__year=issue_date.year,
+            issue_date__month=issue_date.month,
+        ).first()
+        if existing:
+            messages.warning(
+                request,
+                f"Contract for {contract.buyer.name} already has invoice "
+                f"{existing.series_number} for this month.",
+            )
+            return redirect("billing-todo")
+
+        with transaction.atomic():
+            invoice = _create_draft_invoice(contract, issue_date, registry)
+
+        messages.success(request, f"Draft {invoice.series_number} created.")
+        return redirect(
+            reverse(
+                "registry-invoice-detail",
+                kwargs={"registry_id": registry_id, "pk": invoice.pk},
+            )
+        )
+
+
+class BillingTodoView(LoginRequiredMixin, TemplateView):
+    """Monthly billing todo — shows which contracts need invoicing."""
+
+    template_name = "billing_todo.html"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        user = self.request.user
+
+        # Determine target month
+        try:
+            target_year = int(self.request.GET.get("year", date.today().year))
+            target_month = int(self.request.GET.get("month", date.today().month))
+        except (ValueError, TypeError):
+            target_year = date.today().year
+            target_month = date.today().month
+
+        # Compute prev/next month for navigation
+        first = date(target_year, target_month, 1)
+        prev_date = (first - timedelta(days=1)).replace(day=1)
+        if target_month == 12:
+            next_date = date(target_year + 1, 1, 1)
+        else:
+            next_date = date(target_year, target_month + 1, 1)
+
+        # Fetch active monthly contracts with invoice status for target month
+        registries = (
+            user.registries.prefetch_related("seller", "contracts__buyer")
+            .order_by("display_name")
+        )
+
+        todo_registries = []
+        total_pending = 0
+        total_draft = 0
+        total_published = 0
+
+        for registry in registries:
+            contracts = registry.contracts.filter(
+                is_active=True,
+                unit=models.InvoicingUnits.MONTHLY,
+            ).select_related("buyer")
+
+            items = []
+            for contract in contracts:
+                existing = models.TimeInvoice.objects.filter(
+                    contract=contract,
+                    issue_date__year=target_year,
+                    issue_date__month=target_month,
+                ).first()
+
+                if existing:
+                    if existing.status == models.InvoiceStatus.DRAFT:
+                        status = "draft"
+                        total_draft += 1
+                    elif existing.status == models.InvoiceStatus.PUBLISHED:
+                        status = "published"
+                        total_published += 1
+                    else:
+                        status = "storno"
+                else:
+                    status = "pending"
+                    total_pending += 1
+
+                items.append({
+                    "contract": contract,
+                    "status": status,
+                    "existing_invoice": existing,
+                })
+
+            if items:
+                todo_registries.append({
+                    "registry": registry,
+                    "items": items,
+                })
+
+        # Format month name
+        month_name = f"{calendar.month_name[target_month]} {target_year}"
+
+        context.update({
+            "target_year": target_year,
+            "target_month": target_month,
+            "month_name": month_name,
+            "prev_year": prev_date.year,
+            "prev_month": prev_date.month,
+            "next_year": next_date.year,
+            "next_month": next_date.month,
+            "todo_registries": todo_registries,
+            "summary": {
+                "pending": total_pending,
+                "draft": total_draft,
+                "published": total_published,
+            },
+        })
+        return context
+
+
+class BatchDraftView(LoginRequiredMixin, View):
+    """Batch-create draft invoices for selected contracts."""
+
+    def post(self, request):
+        contract_ids = request.POST.getlist("contract_ids")
+        if not contract_ids:
+            messages.warning(request, "No contracts selected.")
+            return redirect("billing-todo")
+
+        try:
+            target_year = int(request.POST.get("target_year", date.today().year))
+            target_month = int(request.POST.get("target_month", date.today().month))
+            issue_date = date(target_year, target_month, 1)
+        except (ValueError, TypeError):
+            issue_date = date.today().replace(day=1)
+
+        # Fetch contracts owned by this user, active, monthly
+        contracts = (
+            models.ServiceContract.objects.filter(
+                pk__in=contract_ids,
+                registry__user=request.user,
+                is_active=True,
+                unit=models.InvoicingUnits.MONTHLY,
+            )
+            .select_related("buyer", "registry")
+            .order_by("registry__display_name", "pk")
+        )
+
+        created = []
+        skipped = []
+
+        with transaction.atomic():
+            for contract in contracts:
+                # Duplicate check
+                existing = models.TimeInvoice.objects.filter(
+                    contract=contract,
+                    issue_date__year=issue_date.year,
+                    issue_date__month=issue_date.month,
+                ).exists()
+                if existing:
+                    skipped.append(contract.buyer.name)
+                    continue
+
+                invoice = _create_draft_invoice(contract, issue_date, contract.registry)
+                created.append(invoice)
+
+        if created:
+            names = ", ".join(inv.series_number for inv in created)
+            messages.success(request, f"Created {len(created)} draft(s): {names}")
+        if skipped:
+            messages.warning(
+                request,
+                f"Skipped {len(skipped)} already invoiced: {', '.join(skipped)}",
+            )
+
+        return redirect(
+            f"{reverse('billing-todo')}?year={target_year}&month={target_month}"
+        )
