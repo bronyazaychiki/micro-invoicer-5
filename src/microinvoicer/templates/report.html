@@ -2,6 +2,16 @@
 {% load humanize %}
 {% block content %}
 
+<div class="row right-align">
+  {% if include_archived %}
+    <span class="grey-text"><small>Showing all registries, including archived.</small></span>
+    <a class="btn btn-small grey" href="{% url 'report' %}">Active only</a>
+  {% else %}
+    <span class="grey-text"><small>Showing active registries only.</small></span>
+    <a class="btn btn-small grey" href="{% url 'report' %}?include_archived=1">Include archived</a>
+  {% endif %}
+</div>
+
 {{ totals|json_script:"totals-data" }}
 
 <div class="row">

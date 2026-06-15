@@ -2,9 +2,12 @@
 
 <div class="row" id="dashboard">
     {% for registry in registries %}
-        <h5><a style="text-transform: uppercase;" href='{% url "registry-update" pk=registry.id %}'>
-            {{ registry.seller.name }} - {{ registry.display_name }}
-        </a></h5>
+        <h5>
+            <a style="text-transform: uppercase;" href='{% url "registry-update" pk=registry.id %}'>
+                {{ registry.seller.name }} - {{ registry.display_name }}
+            </a>
+            <span class="new badge green" data-badge-caption="">active</span>
+        </h5>
 
         <table>
         <tr>
@@ -27,7 +30,7 @@
             <td style="text-align:center">{{ invoice.quantity }} {{invoice.unit}}</td>
             <td style="text-align:center">{{ invoice.value|floatformat:2|intcomma }} {{ invoice.currency }}</td>
             {% if forloop.first %}
-                <td style="text-align:center"><a href="{% url 'registry-invoice-delete'  registry_id=registry.id pk=invoice.id %}">&#x274C;</a></td style="text-align:center">
+                <td style="text-align:center"><a href="{% url 'registry-invoice-delete'  registry_id=registry.id pk=invoice.id %}">&#x274C;</a></td>
             {% else %}
                 <td></td>
             {% endif %}
@@ -57,9 +60,69 @@
         </table>
         <small align="right">{{ registry.contracts.all|length|intword }} contract{{ registry.contracts.all|length|pluralize}} found</small>
 
+        <div class="row right-align">
+            <form method="post" action="{% url 'registry-archive' pk=registry.id %}" style="display:inline">
+                {% csrf_token %}
+                <button class="btn btn-small grey" type="submit">Archive</button>
+            </form>
+            {% if not registry.has_business_data %}
+            <a class="btn btn-small red" href="{% url 'registry-delete' pk=registry.id %}">Delete</a>
+            {% endif %}
+        </div>
+        <hr>
     {% endfor %}
-    <hr>
+
     <div class="row right-align">
         <a class="btn btn-small align-right" href="{% url "registry-add" %}">Add new registry</a>
     </div>
+
+    {% if archived_registries %}
+    <h5 class="grey-text">Archived registries</h5>
+    <p class="grey-text"><small>
+        Hidden from the active workbench and from reports by default. History, invoices and
+        PDFs are kept; you cannot issue new invoices or contracts until you restore them.
+    </small></p>
+    {% for registry in archived_registries %}
+        <h6 class="grey-text">
+            <span style="text-transform: uppercase;">{{ registry.seller.name }} - {{ registry.display_name }}</span>
+            <span class="new badge grey" data-badge-caption="">archived</span>
+        </h6>
+
+        <table>
+        <tr><td>Invoices</td><td></td><td></td><td></td><td></td></tr>
+        {% for invoice in registry.invoices.all reversed %}
+        <tr>
+            <td style="text-align:center"><a href="{% url 'registry-invoice-detail' registry_id=registry.id pk=invoice.id %}">{{ invoice.series_number }}</a></td>
+            <td style="text-align:center">{{ invoice.issue_date|naturalday }}</td>
+            <td style="text-align:center">{{ invoice.buyer.name }}</td>
+            <td style="text-align:center">{{ invoice.quantity }} {{invoice.unit}}</td>
+            <td style="text-align:center">{{ invoice.value|floatformat:2|intcomma }} {{ invoice.currency }}</td>
+        </tr>
+        {% endfor %}
+        </table>
+        <small>{{ registry.invoices.all|length|intword }} invoice{{ registry.invoices.all|length|pluralize}} found</small>
+
+        <table>
+        <tr><td>Contracts</td><td></td></tr>
+        {% for contract in registry.contracts.all reversed %}
+        <tr>
+            <td class="center-align">{{ contract.buyer.name }}</td>
+            <td class="center-align">{{ contract.unit_rate|floatformat:2|intcomma }} {{ contract.currency }} / {{ contract.unit }}</td>
+        </tr>
+        {% endfor %}
+        </table>
+        <small align="right">{{ registry.contracts.all|length|intword }} contract{{ registry.contracts.all|length|pluralize}} found</small>
+
+        <div class="row right-align">
+            <form method="post" action="{% url 'registry-restore' pk=registry.id %}" style="display:inline">
+                {% csrf_token %}
+                <button class="btn btn-small green" type="submit">Restore</button>
+            </form>
+            {% if not registry.has_business_data %}
+            <a class="btn btn-small red" href="{% url 'registry-delete' pk=registry.id %}">Delete</a>
+            {% endif %}
+        </div>
+        <hr>
+    {% endfor %}
+    {% endif %}
 </div>

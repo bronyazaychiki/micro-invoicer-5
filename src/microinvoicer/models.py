@@ -80,6 +80,20 @@ class MicroUser(AbstractBaseUser, PermissionsMixin):
         send_mail(subject, message, from_email, [self.email], **kwargs)
 
 
+class MicroRegistryQuerySet(models.QuerySet):
+    """Lets callers opt into the active/archived split explicitly.
+
+    The default manager still returns every row, so forward FK access from
+    historical invoices/contracts keeps reaching archived registries.
+    """
+
+    def active(self):
+        return self.filter(archived_at__isnull=True)
+
+    def archived(self):
+        return self.filter(archived_at__isnull=False)
+
+
 class MicroRegistry(models.Model):
     user = models.ForeignKey(MicroUser, related_name="registries", on_delete=models.CASCADE)
     seller = models.ForeignKey(FiscalEntity, related_name="+", on_delete=models.CASCADE)
@@ -95,6 +109,26 @@ class MicroRegistry(models.Model):
             MaxValueValidator(100),
         ),
     )
+    archived_at = models.DateTimeField(null=True, blank=True, default=None)
+
+    objects = MicroRegistryQuerySet.as_manager()
+
+    @property
+    def is_archived(self):
+        return self.archived_at is not None
+
+    @property
+    def has_business_data(self):
+        """True when removing the registry would destroy invoice/contract history."""
+        return self.contracts.exists() or self.invoices.exists()
+
+    def archive(self):
+        self.archived_at = timezone.now()
+        self.save(update_fields=["archived_at"])
+
+    def unarchive(self):
+        self.archived_at = None
+        self.save(update_fields=["archived_at"])
 
     def __repr__(self) -> str:
         return f"{self.display_name}, series {self.invoice_series}, {self.contracts.count()} contracts and ..."

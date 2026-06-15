@@ -1,7 +1,9 @@
 """How about now."""
 from datetime import date, timedelta, datetime
 from django.http import FileResponse
+from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse_lazy
+from django.views import View
 from django.views.generic import TemplateView
 from django.views.generic.detail import DetailView
 from django.views.generic.edit import CreateView, DeleteView, UpdateView
@@ -51,9 +53,9 @@ class MicroHomeView(LoginRequiredMixin, TemplateView):
         context = super().get_context_data(**kwargs)
         if self.request.user.is_authenticated:
             user = self.request.user
-            context["registries"] = user.registries.prefetch_related(
-                "seller", "contracts", "invoices"
-            ).all()
+            registries = user.registries.prefetch_related("seller", "contracts", "invoices")
+            context["registries"] = registries.active()
+            context["archived_registries"] = registries.archived()
 
         return context
 
@@ -71,9 +73,14 @@ class ReportView(LoginRequiredMixin, TemplateView):
 
         context = super().get_context_data(**kwargs)
 
-        invoices = models.TimeInvoice.objects.filter(registry__user=self.request.user).order_by(
-            "-issue_date"
-        )
+        # by default the report reflects the active billing entities only; pass
+        # ?include_archived=1 to fold archived registries back in for history.
+        include_archived = self.request.GET.get("include_archived") == "1"
+        context["include_archived"] = include_archived
+        invoices = models.TimeInvoice.objects.filter(registry__user=self.request.user)
+        if not include_archived:
+            invoices = invoices.filter(registry__archived_at__isnull=True)
+        invoices = invoices.order_by("-issue_date")
 
         # build up the monthly / quartery / yearly total
         totals = dict()
@@ -209,8 +216,54 @@ class RegistryDeleteView(MicroFormMixin, DeleteView):
     form_title = "Throwing away whole registry"
     template_name = "confirm_delete.html"
 
+    def get_queryset(self):
+        # scope to the owner so nobody can delete another user's registry by id
+        return super().get_queryset().filter(user=self.request.user)
 
-class ContractCreateView(MicroFormMixin, CreateView):
+    def dispatch(self, request, *args, **kwargs):
+        # a registry that holds history must be archived, never hard-deleted;
+        # only empty registries (no contracts and no invoices) can be removed.
+        if request.user.is_authenticated and self.get_object().has_business_data:
+            return redirect("home")
+        return super().dispatch(request, *args, **kwargs)
+
+
+class RegistryArchiveView(LoginRequiredMixin, View):
+    """Soft-deactivate a registry (POST only); history and PDFs are preserved."""
+
+    def post(self, request, pk):
+        registry = get_object_or_404(models.MicroRegistry, pk=pk, user=request.user)
+        registry.archive()
+        return redirect("home")
+
+
+class RegistryRestoreView(LoginRequiredMixin, View):
+    """Bring an archived registry back onto the active workbench (POST only)."""
+
+    def post(self, request, pk):
+        registry = get_object_or_404(models.MicroRegistry, pk=pk, user=request.user)
+        registry.unarchive()
+        return redirect("home")
+
+
+class ActiveRegistryRequiredMixin:
+    """Blocks issuing new contracts/invoices under an archived registry.
+
+    Declared before LoginRequiredMixin in the MRO so it defers to super() for
+    anonymous users (who must be redirected to login, not bounced to home).
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        if request.user.is_authenticated:
+            registry = get_object_or_404(
+                models.MicroRegistry, pk=kwargs["registry_id"], user=request.user
+            )
+            if registry.is_archived:
+                return redirect("home")
+        return super().dispatch(request, *args, **kwargs)
+
+
+class ContractCreateView(ActiveRegistryRequiredMixin, MicroFormMixin, CreateView):
     model = models.ServiceContract
     form_title = "Register new contract"
     form_class = forms.ServiceContractForm
@@ -274,7 +327,7 @@ class ContractDeleteView(MicroFormMixin, DeleteView):
     template_name = "confirm_delete.html"
 
 
-class TimeInvoiceCreateView(MicroFormMixin, CreateView):
+class TimeInvoiceCreateView(ActiveRegistryRequiredMixin, MicroFormMixin, CreateView):
     model = models.TimeInvoice
     form_title = "Issue new time invoice"
     form_class = forms.TimeInvoiceForm

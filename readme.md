@@ -33,11 +33,14 @@ Under each registry
   - quantity
   - additional fixed costs
 - Can remove most recent invoice only
+- Can *archive* a registry to retire it: the registry leaves the active workbench
+  and the default reports and can no longer issue new invoices or contracts, but its
+  history, invoices and PDFs are preserved and it can be restored. Registries with no
+  history can instead be deleted outright.
 
 ### ToDO use cases
 
 Under each registry
-- Can *archive* a registry
 - New invoices are issued in *draft* state
 - Can publish a *draft* invoice (*published* invoices become read-only)
 - Can only remove *draft* invoices
